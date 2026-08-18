@@ -1,11 +1,12 @@
 import type { ExtensionAPI } from "../../core/extensions/types.ts";
 import { isQwenLocalActive } from "./activation.ts";
-import { endedEmpty, LoopGuard, normalizeToolArgs } from "./guards.ts";
+import { endedEmpty, endedWithAnnouncedAction, LoopGuard, normalizeToolArgs } from "./guards.ts";
 import { rewriteQwenPayload } from "./payload.ts";
 import { buildQwenSystemPrompt } from "./prompt.ts";
 
 const BASH_DEFAULT_TIMEOUT_SECONDS = 120;
 const MAX_NUDGES = 2;
+const PROCEED = "Proceed with that step now using the tools; do not stop to announce it.";
 const NUDGE =
 	"Continue with the task. If it is already complete, reply with a short summary of what you did and how you verified it.";
 
@@ -50,10 +51,12 @@ export default function qwenLocalExtension(pi: ExtensionAPI): void {
 	});
 
 	pi.on("agent_end", (event, ctx) => {
-		if (!isQwenLocalActive(ctx.model) || nudges >= MAX_NUDGES || !endedEmpty(event.messages)) return;
+		if (!isQwenLocalActive(ctx.model) || nudges >= MAX_NUDGES) return;
+		const empty = endedEmpty(event.messages);
+		if (!empty && !endedWithAnnouncedAction(event.messages)) return;
 		nudges++;
 		// The run is still active during agent_end, so this queues as a follow-up
 		// and the session continues with it instead of going idle.
-		pi.sendUserMessage(NUDGE, { deliverAs: "followUp" });
+		pi.sendUserMessage(empty ? NUDGE : PROCEED, { deliverAs: "followUp" });
 	});
 }

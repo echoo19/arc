@@ -15,6 +15,7 @@ Rules:
 - Prefer small targeted edits over rewriting files.
 - Use forward slashes and paths relative to the working directory.
 - Keep command output small (pipe through head/tail; use read instead of cat for files).
+- For a script longer than one line or containing quotes/backslashes, write it to a scratch file (e.g. /tmp/check.js) and run that file; do not fight shell escaping inside node -e.
 - Keep going until the task is complete.`;
 
 const WINDOWS_NOTE =

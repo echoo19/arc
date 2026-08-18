@@ -10,7 +10,12 @@ import type {
 	ToolResultEvent,
 } from "../src/core/extensions/types.ts";
 import { isQwenLocalActive } from "../src/extensions/qwen-local/activation.ts";
-import { endedEmpty, LoopGuard, normalizeToolArgs } from "../src/extensions/qwen-local/guards.ts";
+import {
+	endedEmpty,
+	endedWithAnnouncedAction,
+	LoopGuard,
+	normalizeToolArgs,
+} from "../src/extensions/qwen-local/guards.ts";
 import qwenLocalExtension from "../src/extensions/qwen-local/index.ts";
 import { QWEN_SAMPLING, rewriteQwenPayload } from "../src/extensions/qwen-local/payload.ts";
 import { buildQwenSystemPrompt } from "../src/extensions/qwen-local/prompt.ts";
@@ -253,6 +258,32 @@ describe("LoopGuard", () => {
 			other.record(`r${i}`, `content ${i}`);
 		}
 		expect(other.check("read", { path: "a" }, "r4")).toContain("already made 4 times");
+	});
+});
+
+describe("endedWithAnnouncedAction", () => {
+	it("detects a final text that only announces the next step", () => {
+		const text = (s: string) => [assistant([{ type: "text", text: s }])];
+		expect(endedWithAnnouncedAction(text("I read the files. Now let me create the module and run the tests."))).toBe(
+			true,
+		);
+		expect(endedWithAnnouncedAction(text("Next, I'll update the callers:"))).toBe(true);
+		expect(
+			endedWithAnnouncedAction(
+				text("Done. Added PUT and DELETE handlers and verified with node --test (6 passing)."),
+			),
+		).toBe(false);
+		expect(endedWithAnnouncedAction(text("The bug was in tokenizer.js line 40; fixed and all tests pass."))).toBe(
+			false,
+		);
+		expect(
+			endedWithAnnouncedAction([
+				assistant([
+					{ type: "text", text: "Let me check." },
+					{ type: "toolCall", id: "1", name: "read", arguments: {} },
+				]),
+			]),
+		).toBe(false);
 	});
 });
 

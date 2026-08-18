@@ -62,13 +62,37 @@ export class LoopGuard {
  * "think" and then emit nothing.
  */
 export function endedEmpty(messages: AgentMessage[]): boolean {
-	let last: AssistantMessage | undefined;
-	for (let i = messages.length - 1; i >= 0 && !last; i--) {
-		const message = messages[i];
-		if (message?.role === "assistant") last = message;
-	}
+	const last = lastAssistant(messages);
 	if (!last || last.stopReason !== "stop") return false;
 	return !last.content.some(
 		(block) => block.type === "toolCall" || (block.type === "text" && block.text.trim().length > 0),
 	);
+}
+
+/** Final sentence announces an action ("Let me create the file", "Now I'll run the tests") instead of doing it. */
+const ANNOUNCED_ACTION =
+	/(^|[.!?\n]\s*)(?:now,? |next,? |first,? |then,? |so,? )?(let me|let's|i(?:'ll| will| am going to|'m going to| need to| should))\b[^.!?\n]{0,160}[.:]?\s*$/i;
+
+/**
+ * True when the run stopped normally with text that only announces the next
+ * step and no tool call followed it, which small models do instead of acting.
+ */
+export function endedWithAnnouncedAction(messages: AgentMessage[]): boolean {
+	const last = lastAssistant(messages);
+	if (!last || last.stopReason !== "stop") return false;
+	if (last.content.some((block) => block.type === "toolCall")) return false;
+	const text = last.content
+		.filter((block): block is Extract<typeof block, { type: "text" }> => block.type === "text")
+		.map((block) => block.text)
+		.join("\n")
+		.trim();
+	return text.length > 0 && text.length < 600 && ANNOUNCED_ACTION.test(text);
+}
+
+function lastAssistant(messages: AgentMessage[]): AssistantMessage | undefined {
+	for (let i = messages.length - 1; i >= 0; i--) {
+		const message = messages[i];
+		if (message?.role === "assistant") return message;
+	}
+	return undefined;
 }
