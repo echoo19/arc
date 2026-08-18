@@ -77,8 +77,8 @@
           "path": "custom-provider.md"
         },
         {
-          "title": "Qwill (local Qwen)",
-          "path": "qwill.md"
+          "title": "Arc (local Qwen)",
+          "path": "arc.md"
         }
       ]
     },

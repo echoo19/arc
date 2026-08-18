@@ -1,6 +1,6 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { describe, expect, it } from "vitest";
-import { pruneReplayedThinking, replayThinkingMode } from "../src/extensions/qwill/replay.ts";
+import { pruneReplayedThinking, replayThinkingMode } from "../src/extensions/arc/replay.ts";
 
 function assistant(id: string, withThinking: boolean): AgentMessage {
 	return {

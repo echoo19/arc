@@ -28,11 +28,11 @@ const THINKING_LEVELS = new Set<string>(["off", "minimal", "low", "medium", "hig
 
 /**
  * Optional thinking level for tool steps (assistant turns that follow a tool
- * result rather than a user message), from QWILL_STEP_THINKING. Lets the
+ * result rather than a user message), from ARC_STEP_THINKING. Lets the
  * model think hard once when a user turn starts and briefly on each step.
  */
 export function stepThinkingLevelFromEnv(
-	value: string | undefined = process.env.QWILL_STEP_THINKING,
+	value: string | undefined = process.env.ARC_STEP_THINKING,
 ): ThinkingLevel | undefined {
 	const normalized = value?.trim().toLowerCase();
 	return normalized && THINKING_LEVELS.has(normalized) ? (normalized as ThinkingLevel) : undefined;
@@ -65,7 +65,7 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
  * returns the same object; returns `undefined` for anything that is not a
  * chat-completions payload.
  */
-export function rewriteQwillPayload(
+export function rewriteArcPayload(
 	payload: unknown,
 	thinkingLevel: ThinkingLevel | undefined,
 	stepThinkingLevel: ThinkingLevel | undefined = stepThinkingLevelFromEnv(),

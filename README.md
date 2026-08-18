@@ -10,15 +10,15 @@
 
 > New issues and PRs from new contributors are auto-closed by default. Maintainers review auto-closed issues daily. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
-# Qwill: Pi tuned for local Qwen
+# Arc: Pi tuned for local Qwen
 
 This is a fork of [earendil-works/pi](https://github.com/earendil-works/pi) that makes the coding agent genuinely usable with a **local Qwen model on a small context window** (Qwen3.6-35B-A3B on llama.cpp, 32k per slot, on a 12GB GPU). Everything upstream still works; the fork adds:
 
 * Core fixes that only kick in below ~128k context and are neutral otherwise: tool output limits, compaction thresholds and the output-token margin scale with the model's context window (upstream defaults were a silent no-op on 32k); bash output is stripped of ANSI/CR; the edit tool tolerates indentation differences and shows the closest match on a miss; built-in tools accept common argument aliases (`file_path`, `old_string`, `cmd`, ...); validation errors stop echoing whole payloads.
-* A hidden built-in extension, **qwill** ([docs](packages/coding-agent/docs/qwill.md)), which gives the agent its name and, active for provider `local`/`llama.cpp` or a Qwen model on a local host: compact system prompt, Qwen sampling defaults, thinking on/off plus a per-level `thinking_budget_tokens` (unbounded thinking was the single biggest failure mode), a result-aware loop guard, nudges when the model stops without acting, a reasoning-replay policy for long tool loops, and a bash default timeout.
+* A hidden built-in extension, **arc** ([docs](packages/coding-agent/docs/arc.md)), which gives the agent its name and, active for provider `local`/`llama.cpp` or a Qwen model on a local host: compact system prompt, Qwen sampling defaults, thinking on/off plus a per-level `thinking_budget_tokens` (unbounded thinking was the single biggest failure mode), a result-aware loop guard, nudges when the model stops without acting, a reasoning-replay policy for long tool loops, and a bash default timeout.
 * Everything is measured with a 16-task hidden-test benchmark against the live local model (see the run notes in the fork's commit history).
 
-Branch `qwen` carries the fork; `main` tracks upstream. The CLI is available as both `qwill` and `pi`.
+Branch `qwen` carries the fork; `main` tracks upstream. The CLI is available as both `arc` and `pi`.
 
 ---
 

@@ -1,6 +1,6 @@
 import { type BuildSystemPromptOptions, buildSystemPrompt } from "../../core/system-prompt.ts";
 
-const GUIDANCE = `You are Qwill, a coding agent (built on pi) with tools to read, search, edit, write and run code in the user's project. Work autonomously and finish the task end to end; do not ask questions unless truly blocked.
+const GUIDANCE = `You are Arc, a coding agent (built on pi) with tools to read, search, edit, write and run code in the user's project. Work autonomously and finish the task end to end; do not ask questions unless truly blocked.
 
 How to work:
 1. Look before you change: read the files you will modify (for large files use offset/limit) and search for callers before changing a signature.
@@ -28,7 +28,7 @@ const WINDOWS_NOTE =
  * appended by the core builder. Tool promptGuidelines are dropped on purpose:
  * the built-in ones duplicate the rules below and cost context.
  */
-export function buildQwillSystemPrompt(options: BuildSystemPromptOptions, platform: string = process.platform): string {
+export function buildArcSystemPrompt(options: BuildSystemPromptOptions, platform: string = process.platform): string {
 	const tools = options.selectedTools ?? ["read", "bash", "edit", "write"];
 	const toolLines = tools.map((name) => {
 		const snippet = options.toolSnippets?.[name];

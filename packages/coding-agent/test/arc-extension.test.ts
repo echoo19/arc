@@ -9,16 +9,16 @@ import type {
 	ToolCallEvent,
 	ToolResultEvent,
 } from "../src/core/extensions/types.ts";
-import { isQwillActive } from "../src/extensions/qwill/activation.ts";
-import { endedEmpty, endedWithAnnouncedAction, LoopGuard, normalizeToolArgs } from "../src/extensions/qwill/guards.ts";
-import qwillExtension from "../src/extensions/qwill/index.ts";
+import { isArcActive } from "../src/extensions/arc/activation.ts";
+import { endedEmpty, endedWithAnnouncedAction, LoopGuard, normalizeToolArgs } from "../src/extensions/arc/guards.ts";
+import arcExtension from "../src/extensions/arc/index.ts";
 import {
 	isToolStep,
 	QWEN_SAMPLING,
-	rewriteQwillPayload,
+	rewriteArcPayload,
 	stepThinkingLevelFromEnv,
-} from "../src/extensions/qwill/payload.ts";
-import { buildQwillSystemPrompt } from "../src/extensions/qwill/prompt.ts";
+} from "../src/extensions/arc/payload.ts";
+import { buildArcSystemPrompt } from "../src/extensions/arc/prompt.ts";
 
 function model(overrides: Partial<Model<Api>> = {}): Model<Api> {
 	return {
@@ -56,37 +56,37 @@ function assistant(content: unknown[], stopReason = "stop"): AgentMessage {
 	} as AgentMessage;
 }
 
-describe("qwill activation", () => {
+describe("arc activation", () => {
 	it("activates for local providers and qwen ids on openai-completions", () => {
-		expect(isQwillActive(model(), undefined)).toBe(true);
-		expect(isQwillActive(model({ provider: "llama.cpp", id: "gemma" }), undefined)).toBe(true);
+		expect(isArcActive(model(), undefined)).toBe(true);
+		expect(isArcActive(model({ provider: "llama.cpp", id: "gemma" }), undefined)).toBe(true);
 		expect(
-			isQwillActive(
+			isArcActive(
 				model({ provider: "vllm", id: "Qwen/Qwen3-Coder", baseUrl: "http://localhost:8000/v1" }),
 				undefined,
 			),
 		).toBe(true);
 		expect(
-			isQwillActive(
+			isArcActive(
 				model({ provider: "openrouter", id: "qwen/qwen3-coder", baseUrl: "https://openrouter.ai/api/v1" }),
 				undefined,
 			),
 		).toBe(false);
-		expect(isQwillActive(model({ provider: "openai", id: "gpt-5" }), undefined)).toBe(false);
-		expect(isQwillActive(model({ api: "anthropic-messages" }), undefined)).toBe(false);
-		expect(isQwillActive(undefined, undefined)).toBe(false);
+		expect(isArcActive(model({ provider: "openai", id: "gpt-5" }), undefined)).toBe(false);
+		expect(isArcActive(model({ api: "anthropic-messages" }), undefined)).toBe(false);
+		expect(isArcActive(undefined, undefined)).toBe(false);
 	});
 
-	it("honours QWILL_PROFILE", () => {
-		expect(isQwillActive(model(), "0")).toBe(false);
-		expect(isQwillActive(model(), "off")).toBe(false);
-		expect(isQwillActive(model({ provider: "openai", id: "gpt-5" }), "1")).toBe(true);
-		expect(isQwillActive(model({ provider: "openai", id: "gpt-5" }), "on")).toBe(true);
-		expect(isQwillActive(model({ api: "anthropic-messages" }), "on")).toBe(false);
+	it("honours ARC_PROFILE", () => {
+		expect(isArcActive(model(), "0")).toBe(false);
+		expect(isArcActive(model(), "off")).toBe(false);
+		expect(isArcActive(model({ provider: "openai", id: "gpt-5" }), "1")).toBe(true);
+		expect(isArcActive(model({ provider: "openai", id: "gpt-5" }), "on")).toBe(true);
+		expect(isArcActive(model({ api: "anthropic-messages" }), "on")).toBe(false);
 	});
 });
 
-describe("buildQwillSystemPrompt", () => {
+describe("buildArcSystemPrompt", () => {
 	const options = {
 		cwd: "C:\\work\\proj",
 		selectedTools: ["read", "bash", "edit"],
@@ -96,7 +96,7 @@ describe("buildQwillSystemPrompt", () => {
 	};
 
 	it("lists tools, keeps the rules, and appends project context and cwd", () => {
-		const prompt = buildQwillSystemPrompt(options, "linux");
+		const prompt = buildArcSystemPrompt(options, "linux");
 		expect(prompt).toContain("- read: Read a file");
 		expect(prompt).toContain("- edit: Edit a file");
 		expect(prompt).toContain("Never repeat a tool call with identical arguments");
@@ -108,17 +108,17 @@ describe("buildQwillSystemPrompt", () => {
 	});
 
 	it("adds the Git Bash note on Windows", () => {
-		expect(buildQwillSystemPrompt(options, "win32")).toContain("Git Bash on Windows");
+		expect(buildArcSystemPrompt(options, "win32")).toContain("Git Bash on Windows");
 	});
 
 	it("stays compact", () => {
-		const prompt = buildQwillSystemPrompt({ ...options, contextFiles: [] }, "win32");
+		const prompt = buildArcSystemPrompt({ ...options, contextFiles: [] }, "win32");
 		// ~4 chars per token; 450 tokens budget.
 		expect(prompt.length).toBeLessThan(450 * 4);
 	});
 });
 
-describe("rewriteQwillPayload", () => {
+describe("rewriteArcPayload", () => {
 	const base = () => ({
 		model: "qwen3.6-35b-a3b",
 		messages: [{ role: "user", content: "hi" }],
@@ -128,13 +128,13 @@ describe("rewriteQwillPayload", () => {
 	});
 
 	it("ignores non chat payloads", () => {
-		expect(rewriteQwillPayload({ input: [] }, "medium")).toBeUndefined();
-		expect(rewriteQwillPayload("x", "medium")).toBeUndefined();
+		expect(rewriteArcPayload({ input: [] }, "medium")).toBeUndefined();
+		expect(rewriteArcPayload("x", "medium")).toBeUndefined();
 	});
 
 	it("disables thinking and applies instant sampling when off", () => {
 		const payload = base();
-		const result = rewriteQwillPayload(payload, "off") as Record<string, unknown>;
+		const result = rewriteArcPayload(payload, "off") as Record<string, unknown>;
 		expect(result).toBe(payload);
 		expect(result.chat_template_kwargs).toEqual({ enable_thinking: false, preserve_thinking: false });
 		expect(result.thinking_budget_tokens).toBeUndefined();
@@ -151,22 +151,22 @@ describe("rewriteQwillPayload", () => {
 	});
 
 	it("treats undefined level as off", () => {
-		const result = rewriteQwillPayload(base(), undefined) as Record<string, unknown>;
+		const result = rewriteArcPayload(base(), undefined) as Record<string, unknown>;
 		expect(result.chat_template_kwargs).toEqual({ enable_thinking: false, preserve_thinking: false });
 	});
 
 	it("enables thinking with a clamped budget and thinking sampling", () => {
-		const result = rewriteQwillPayload(base(), "medium") as Record<string, unknown>;
+		const result = rewriteArcPayload(base(), "medium") as Record<string, unknown>;
 		expect(result.chat_template_kwargs).toEqual({ enable_thinking: true, preserve_thinking: false });
 		expect(result.thinking_budget_tokens).toBe(3072);
 		expect(result.temperature).toBe(QWEN_SAMPLING.thinking.temperature);
 		expect(result.top_p).toBe(QWEN_SAMPLING.thinking.top_p);
 
-		const high = rewriteQwillPayload({ ...base(), max_tokens: 4096 }, "high") as Record<string, unknown>;
+		const high = rewriteArcPayload({ ...base(), max_tokens: 4096 }, "high") as Record<string, unknown>;
 		expect(high.thinking_budget_tokens).toBe(3072);
-		const tiny = rewriteQwillPayload({ ...base(), max_tokens: 512 }, "max") as Record<string, unknown>;
+		const tiny = rewriteArcPayload({ ...base(), max_tokens: 512 }, "max") as Record<string, unknown>;
 		expect(tiny.thinking_budget_tokens).toBe(256);
-		const noMax = rewriteQwillPayload({ ...base(), max_tokens: undefined }, "max") as Record<string, unknown>;
+		const noMax = rewriteArcPayload({ ...base(), max_tokens: undefined }, "max") as Record<string, unknown>;
 		expect(noMax.thinking_budget_tokens).toBe(7168);
 	});
 
@@ -178,7 +178,7 @@ describe("rewriteQwillPayload", () => {
 			thinking_budget_tokens: 100,
 			chat_template_kwargs: { foo: "bar", enable_thinking: false },
 		};
-		const result = rewriteQwillPayload(payload, "low") as Record<string, unknown>;
+		const result = rewriteArcPayload(payload, "low") as Record<string, unknown>;
 		expect(result.temperature).toBe(0.2);
 		expect(result.presence_penalty).toBe(1.5);
 		expect(result.thinking_budget_tokens).toBe(100);
@@ -188,7 +188,7 @@ describe("rewriteQwillPayload", () => {
 });
 
 describe("step thinking level", () => {
-	it("parses QWILL_STEP_THINKING", () => {
+	it("parses ARC_STEP_THINKING", () => {
 		expect(stepThinkingLevelFromEnv(undefined)).toBeUndefined();
 		expect(stepThinkingLevelFromEnv("bogus")).toBeUndefined();
 		expect(stepThinkingLevelFromEnv(" Low ")).toBe("low");
@@ -203,13 +203,13 @@ describe("step thinking level", () => {
 
 	it("uses the step level mid tool loop and the turn level otherwise", () => {
 		const turn = { messages: [{ role: "user" }], max_tokens: 8192 };
-		expect((rewriteQwillPayload(turn, "high", "low") as Record<string, unknown>).thinking_budget_tokens).toBe(6144);
+		expect((rewriteArcPayload(turn, "high", "low") as Record<string, unknown>).thinking_budget_tokens).toBe(6144);
 		const step = { messages: [{ role: "user" }, { role: "assistant" }, { role: "tool" }], max_tokens: 8192 };
-		expect((rewriteQwillPayload(step, "high", "low") as Record<string, unknown>).thinking_budget_tokens).toBe(1024);
+		expect((rewriteArcPayload(step, "high", "low") as Record<string, unknown>).thinking_budget_tokens).toBe(1024);
 		const fresh = () => ({ messages: [{ role: "user" }, { role: "assistant" }, { role: "tool" }], max_tokens: 8192 });
-		const off = rewriteQwillPayload(fresh(), "high", "off") as Record<string, unknown>;
+		const off = rewriteArcPayload(fresh(), "high", "off") as Record<string, unknown>;
 		expect(off.chat_template_kwargs).toEqual({ enable_thinking: false, preserve_thinking: false });
-		const none = rewriteQwillPayload(fresh(), "high", undefined) as Record<string, unknown>;
+		const none = rewriteArcPayload(fresh(), "high", undefined) as Record<string, unknown>;
 		expect(none.thinking_budget_tokens).toBe(6144);
 	});
 });
@@ -336,13 +336,13 @@ function loadExtension() {
 		sendUserMessage,
 		getThinkingLevel: () => "off",
 	} as unknown as ExtensionAPI;
-	qwillExtension(api);
+	arcExtension(api);
 	const ctxFor = (m: Model<Api> | undefined, thinkingLevel = "medium") =>
 		({ model: m, thinkingLevel, cwd: "/tmp" }) as unknown as ExtensionContext;
 	return { handlers, sendUserMessage, ctxFor };
 }
 
-describe("qwill extension hooks", () => {
+describe("arc extension hooks", () => {
 	const startEvent: BeforeAgentStartEvent = {
 		type: "before_agent_start",
 		prompt: "go",

@@ -1,8 +1,8 @@
 import type { ExtensionAPI } from "../../core/extensions/types.ts";
-import { isQwillActive } from "./activation.ts";
+import { isArcActive } from "./activation.ts";
 import { endedEmpty, endedWithAnnouncedAction, LoopGuard, normalizeToolArgs } from "./guards.ts";
-import { rewriteQwillPayload } from "./payload.ts";
-import { buildQwillSystemPrompt } from "./prompt.ts";
+import { rewriteArcPayload } from "./payload.ts";
+import { buildArcSystemPrompt } from "./prompt.ts";
 import { pruneReplayedThinking, replayThinkingMode } from "./replay.ts";
 
 const BASH_DEFAULT_TIMEOUT_SECONDS = 120;
@@ -16,34 +16,34 @@ const NUDGE =
  * prompt, Qwen sampling and thinking wiring on the request body, tolerant tool
  * argument names, a repeated-call guard, and a nudge when the model stops
  * without producing anything. All hooks are no-ops when the profile is not
- * active for the current model (see isQwillActive).
+ * active for the current model (see isArcActive).
  */
-export default function qwillExtension(pi: ExtensionAPI): void {
+export default function arcExtension(pi: ExtensionAPI): void {
 	const loopGuard = new LoopGuard();
 	let nudges = 0;
 
 	pi.on("before_agent_start", (event, ctx) => {
-		if (!isQwillActive(ctx.model)) return undefined;
+		if (!isArcActive(ctx.model)) return undefined;
 		loopGuard.reset();
 		nudges = 0;
 		// Respect an explicit user prompt (--system-prompt / SYSTEM.md).
 		if (event.systemPromptOptions.customPrompt) return undefined;
-		return { systemPrompt: buildQwillSystemPrompt(event.systemPromptOptions) };
+		return { systemPrompt: buildArcSystemPrompt(event.systemPromptOptions) };
 	});
 
 	pi.on("context", (event, ctx) => {
-		if (!isQwillActive(ctx.model)) return undefined;
+		if (!isArcActive(ctx.model)) return undefined;
 		const messages = pruneReplayedThinking(event.messages, replayThinkingMode(), ctx.getContextUsage()?.percent);
 		return messages ? { messages } : undefined;
 	});
 
 	pi.on("before_provider_request", (event, ctx) => {
-		if (!isQwillActive(ctx.model)) return undefined;
-		return rewriteQwillPayload(event.payload, ctx.thinkingLevel ?? pi.getThinkingLevel());
+		if (!isArcActive(ctx.model)) return undefined;
+		return rewriteArcPayload(event.payload, ctx.thinkingLevel ?? pi.getThinkingLevel());
 	});
 
 	pi.on("tool_call", (event, ctx) => {
-		if (!isQwillActive(ctx.model)) return undefined;
+		if (!isArcActive(ctx.model)) return undefined;
 		const input = normalizeToolArgs(event.toolName, event.input);
 		if (event.toolName === "bash" && input.timeout === undefined) input.timeout = BASH_DEFAULT_TIMEOUT_SECONDS;
 		const reason = loopGuard.check(event.toolName, input, event.toolCallId);
@@ -51,14 +51,14 @@ export default function qwillExtension(pi: ExtensionAPI): void {
 	});
 
 	pi.on("tool_result", (event, ctx) => {
-		if (!isQwillActive(ctx.model)) return undefined;
+		if (!isArcActive(ctx.model)) return undefined;
 		const text = event.content.map((block) => (block.type === "text" ? block.text : block.type)).join("\n");
 		loopGuard.record(event.toolCallId, text);
 		return undefined;
 	});
 
 	pi.on("agent_end", (event, ctx) => {
-		if (!isQwillActive(ctx.model) || nudges >= MAX_NUDGES) return;
+		if (!isArcActive(ctx.model) || nudges >= MAX_NUDGES) return;
 		const empty = endedEmpty(event.messages);
 		if (!empty && !endedWithAnnouncedAction(event.messages)) return;
 		nudges++;

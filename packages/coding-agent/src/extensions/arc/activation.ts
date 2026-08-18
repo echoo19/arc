@@ -4,17 +4,17 @@ const LOCAL_PROVIDERS = new Set(["local", "llama.cpp"]);
 const LOCAL_HOST = /^https?:\/\/(localhost|127\.\d+\.\d+\.\d+|\[::1\]|0\.0\.0\.0|host\.docker\.internal)(:\d+)?(\/|$)/i;
 
 /**
- * Whether the Qwill profile applies to `model`.
+ * Whether the Arc profile applies to `model`.
  *
- * `QWILL_PROFILE=0|off` disables it everywhere; `1|on` forces it for any
+ * `ARC_PROFILE=0|off` disables it everywhere; `1|on` forces it for any
  * openai-completions model. Otherwise it activates for the local providers
  * ("local", "llama.cpp") and for any model id containing "qwen" that is served
  * from a local host, as long as the wire format is openai-completions. Cloud
  * Qwen endpoints are left alone unless forced.
  */
-export function isQwillActive(
+export function isArcActive(
 	model: Model<Api> | undefined,
-	profile: string | undefined = process.env.QWILL_PROFILE,
+	profile: string | undefined = process.env.ARC_PROFILE,
 ): boolean {
 	if (!model || model.api !== "openai-completions") return false;
 	const setting = profile?.trim().toLowerCase();
