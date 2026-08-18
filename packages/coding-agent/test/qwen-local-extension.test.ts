@@ -17,7 +17,12 @@ import {
 	normalizeToolArgs,
 } from "../src/extensions/qwen-local/guards.ts";
 import qwenLocalExtension from "../src/extensions/qwen-local/index.ts";
-import { QWEN_SAMPLING, rewriteQwenPayload } from "../src/extensions/qwen-local/payload.ts";
+import {
+	isToolStep,
+	QWEN_SAMPLING,
+	rewriteQwenPayload,
+	stepThinkingLevelFromEnv,
+} from "../src/extensions/qwen-local/payload.ts";
 import { buildQwenSystemPrompt } from "../src/extensions/qwen-local/prompt.ts";
 
 function model(overrides: Partial<Model<Api>> = {}): Model<Api> {
@@ -184,6 +189,33 @@ describe("rewriteQwenPayload", () => {
 		expect(result.thinking_budget_tokens).toBe(100);
 		expect(result.top_p).toBe(QWEN_SAMPLING.thinking.top_p);
 		expect(result.chat_template_kwargs).toEqual({ foo: "bar", enable_thinking: true, preserve_thinking: false });
+	});
+});
+
+describe("step thinking level", () => {
+	it("parses PI_QWEN_STEP_THINKING", () => {
+		expect(stepThinkingLevelFromEnv(undefined)).toBeUndefined();
+		expect(stepThinkingLevelFromEnv("bogus")).toBeUndefined();
+		expect(stepThinkingLevelFromEnv(" Low ")).toBe("low");
+		expect(stepThinkingLevelFromEnv("off")).toBe("off");
+	});
+
+	it("detects tool steps from the wire messages", () => {
+		expect(isToolStep([{ role: "user" }])).toBe(false);
+		expect(isToolStep([{ role: "user" }, { role: "assistant" }, { role: "tool" }])).toBe(true);
+		expect(isToolStep([{ role: "user" }, { role: "assistant" }, { role: "tool" }, { role: "user" }])).toBe(false);
+	});
+
+	it("uses the step level mid tool loop and the turn level otherwise", () => {
+		const turn = { messages: [{ role: "user" }], max_tokens: 8192 };
+		expect((rewriteQwenPayload(turn, "high", "low") as Record<string, unknown>).thinking_budget_tokens).toBe(6144);
+		const step = { messages: [{ role: "user" }, { role: "assistant" }, { role: "tool" }], max_tokens: 8192 };
+		expect((rewriteQwenPayload(step, "high", "low") as Record<string, unknown>).thinking_budget_tokens).toBe(1024);
+		const fresh = () => ({ messages: [{ role: "user" }, { role: "assistant" }, { role: "tool" }], max_tokens: 8192 });
+		const off = rewriteQwenPayload(fresh(), "high", "off") as Record<string, unknown>;
+		expect(off.chat_template_kwargs).toEqual({ enable_thinking: false, preserve_thinking: false });
+		const none = rewriteQwenPayload(fresh(), "high", undefined) as Record<string, unknown>;
+		expect(none.thinking_budget_tokens).toBe(6144);
 	});
 });
 

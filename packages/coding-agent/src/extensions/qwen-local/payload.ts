@@ -24,6 +24,30 @@ const MIN_THINKING_BUDGET = 256;
 
 type Payload = Record<string, unknown> & { messages: unknown[] };
 
+const THINKING_LEVELS = new Set<string>(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
+
+/**
+ * Optional thinking level for tool steps (assistant turns that follow a tool
+ * result rather than a user message), from PI_QWEN_STEP_THINKING. Lets the
+ * model think hard once when a user turn starts and briefly on each step.
+ */
+export function stepThinkingLevelFromEnv(
+	value: string | undefined = process.env.PI_QWEN_STEP_THINKING,
+): ThinkingLevel | undefined {
+	const normalized = value?.trim().toLowerCase();
+	return normalized && THINKING_LEVELS.has(normalized) ? (normalized as ThinkingLevel) : undefined;
+}
+
+/** True when the last non-tool message in the request is an assistant message, i.e. we are mid tool loop. */
+export function isToolStep(messages: unknown[]): boolean {
+	for (let i = messages.length - 1; i >= 0; i--) {
+		const role = asRecord(messages[i])?.role;
+		if (role === "tool") continue;
+		return role === "assistant";
+	}
+	return false;
+}
+
 function isPayload(value: unknown): value is Payload {
 	return typeof value === "object" && value !== null && Array.isArray((value as { messages?: unknown }).messages);
 }
@@ -41,9 +65,14 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
  * returns the same object; returns `undefined` for anything that is not a
  * chat-completions payload.
  */
-export function rewriteQwenPayload(payload: unknown, thinkingLevel: ThinkingLevel | undefined): unknown {
+export function rewriteQwenPayload(
+	payload: unknown,
+	thinkingLevel: ThinkingLevel | undefined,
+	stepThinkingLevel: ThinkingLevel | undefined = stepThinkingLevelFromEnv(),
+): unknown {
 	if (!isPayload(payload)) return undefined;
-	const level = thinkingLevel ?? "off";
+	const level =
+		stepThinkingLevel !== undefined && isToolStep(payload.messages) ? stepThinkingLevel : (thinkingLevel ?? "off");
 	const thinking = level !== "off";
 
 	payload.chat_template_kwargs = {
