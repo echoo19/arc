@@ -7,6 +7,7 @@ import type {
 	ExtensionAPI,
 	ExtensionContext,
 	ToolCallEvent,
+	ToolResultEvent,
 } from "../src/core/extensions/types.ts";
 import { isQwenLocalActive } from "../src/extensions/qwen-local/activation.ts";
 import { endedEmpty, LoopGuard, normalizeToolArgs } from "../src/extensions/qwen-local/guards.ts";
@@ -224,21 +225,34 @@ describe("normalizeToolArgs", () => {
 });
 
 describe("LoopGuard", () => {
-	it("blocks the third identical call and counts the blocked attempt", () => {
+	it("blocks the third identical call only when the previous two returned the same result", () => {
 		const guard = new LoopGuard();
-		expect(guard.check("read", { path: "a" })).toBeUndefined();
-		expect(guard.check("read", { path: "b" })).toBeUndefined();
-		expect(guard.check("read", { path: "a" })).toBeUndefined();
-		// reads get twice the allowance: the third and fourth identical reads still pass
-		expect(guard.check("read", { path: "a" })).toBeUndefined();
-		expect(guard.check("read", { path: "a" })).toBeUndefined();
-		expect(guard.check("read", { path: "a" })).toContain("already made 4 times");
-		expect(guard.check("read", { path: "a" })).toContain("already made 5 times");
-		expect(guard.check("bash", { command: "ls" })).toBeUndefined();
-		expect(guard.check("bash", { command: "ls" })).toBeUndefined();
-		expect(guard.check("bash", { command: "ls" })).toContain("already made 2 times");
+		expect(guard.check("bash", { command: "npm test" }, "c1")).toBeUndefined();
+		guard.record("c1", "1 failing");
+		expect(guard.check("edit", { path: "a" }, "c2")).toBeUndefined();
+		guard.record("c2", "ok");
+		expect(guard.check("bash", { command: "npm test" }, "c3")).toBeUndefined();
+		guard.record("c3", "all passing"); // result changed: re-running tests after an edit is fine
+		expect(guard.check("bash", { command: "npm test" }, "c4")).toBeUndefined();
+		guard.record("c4", "all passing"); // now two identical results in a row
+		expect(guard.check("bash", { command: "npm test" }, "c5")).toContain("returned the same result");
 		guard.reset();
-		expect(guard.check("read", { path: "a" })).toBeUndefined();
+		expect(guard.check("bash", { command: "npm test" }, "c6")).toBeUndefined();
+	});
+
+	it("blocks a repeated failing edit and applies a hard limit regardless of results", () => {
+		const guard = new LoopGuard(4);
+		for (const id of ["e1", "e2"]) {
+			expect(guard.check("edit", { path: "a", edits: [] }, id)).toBeUndefined();
+			guard.record(id, "Could not find the exact text");
+		}
+		expect(guard.check("edit", { path: "a", edits: [] }, "e3")).toContain("already made 2 times");
+		const other = new LoopGuard(4);
+		for (let i = 0; i < 4; i++) {
+			expect(other.check("read", { path: "a" }, `r${i}`)).toBeUndefined();
+			other.record(`r${i}`, `content ${i}`);
+		}
+		expect(other.check("read", { path: "a" }, "r4")).toContain("already made 4 times");
 	});
 });
 
@@ -323,11 +337,27 @@ describe("qwen-local extension hooks", () => {
 	it("normalizes args, defaults bash timeout, and blocks loops per prompt", async () => {
 		const { handlers, ctxFor } = loadExtension();
 		const ctx = ctxFor(model());
-		const call = async (input: Record<string, unknown>) =>
-			handlers.get("tool_call")!(
-				{ type: "tool_call", toolName: "bash", toolCallId: "1", input } as ToolCallEvent,
+		let id = 0;
+		const call = async (input: Record<string, unknown>, result = "same output") => {
+			const toolCallId = String(++id);
+			const outcome = await handlers.get("tool_call")!(
+				{ type: "tool_call", toolName: "bash", toolCallId, input } as ToolCallEvent,
 				ctx,
 			);
+			if (!outcome) {
+				await handlers.get("tool_result")!(
+					{
+						type: "tool_result",
+						toolName: "bash",
+						toolCallId,
+						input,
+						content: [{ type: "text", text: result }],
+					} as ToolResultEvent,
+					ctx,
+				);
+			}
+			return outcome;
+		};
 		const first: Record<string, unknown> = { cmd: "ls" };
 		expect(await call(first)).toBeUndefined();
 		expect(first).toEqual({ cmd: "ls", command: "ls", timeout: 120 });

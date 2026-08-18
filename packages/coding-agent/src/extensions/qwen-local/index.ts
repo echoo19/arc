@@ -38,8 +38,15 @@ export default function qwenLocalExtension(pi: ExtensionAPI): void {
 		if (!isQwenLocalActive(ctx.model)) return undefined;
 		const input = normalizeToolArgs(event.toolName, event.input);
 		if (event.toolName === "bash" && input.timeout === undefined) input.timeout = BASH_DEFAULT_TIMEOUT_SECONDS;
-		const reason = loopGuard.check(event.toolName, input);
+		const reason = loopGuard.check(event.toolName, input, event.toolCallId);
 		return reason ? { block: true, reason } : undefined;
+	});
+
+	pi.on("tool_result", (event, ctx) => {
+		if (!isQwenLocalActive(ctx.model)) return undefined;
+		const text = event.content.map((block) => (block.type === "text" ? block.text : block.type)).join("\n");
+		loopGuard.record(event.toolCallId, text);
+		return undefined;
 	});
 
 	pi.on("agent_end", (event, ctx) => {
