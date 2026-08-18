@@ -29,6 +29,10 @@ Only while active:
 - **Reasoning replay.** Qwen's chat template keeps every step's reasoning that follows the last user message, so a long tool loop accumulates thinking tokens in the prompt. `ARC_REPLAY_THINKING` controls how much earlier reasoning is replayed: `auto` (default) replays everything while context usage is below 50% and then keeps only the latest step's reasoning; `all` always replays; `last` keeps only the latest step; `none` never replays. Dropping older reasoning re-prefills only the previous step's tool call and result, so it is much cheaper than a compaction.
 - **Empty stops.** If the model ends a run with `stop` but produced no text and no tool calls, or its final text only announces the next step ("Now let me create the file") without a tool call, a follow-up user message asks it to continue (at most twice per prompt).
 
+## Status
+
+`/arc` in interactive mode prints whether the profile is active for the current model, the thinking level and budget, the step level, and the replay mode.
+
 ## Recommended models.json
 
 ```json

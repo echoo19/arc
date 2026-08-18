@@ -7,7 +7,7 @@ import {
 	LoopGuard,
 	normalizeToolArgs,
 } from "./guards.ts";
-import { rewriteArcPayload } from "./payload.ts";
+import { QWEN_THINKING_BUDGET, rewriteArcPayload, stepThinkingLevelFromEnv } from "./payload.ts";
 import { buildArcSystemPrompt } from "./prompt.ts";
 import { pruneReplayedThinking, replayThinkingMode, stubTruncatedResponses } from "./replay.ts";
 
@@ -68,6 +68,24 @@ export default function arcExtension(pi: ExtensionAPI): void {
 		const text = event.content.map((block) => (block.type === "text" ? block.text : block.type)).join("\n");
 		loopGuard.record(event.toolCallId, text);
 		return undefined;
+	});
+
+	pi.registerCommand("arc", {
+		description: "Show whether the Arc local-Qwen profile is active and how it is configured",
+		handler: async (_args, ctx) => {
+			const model = ctx.model;
+			const active = isArcActive(model);
+			const level = ctx.thinkingLevel ?? pi.getThinkingLevel();
+			const step = stepThinkingLevelFromEnv();
+			const budget = level === "off" ? "off" : `${QWEN_THINKING_BUDGET[level]} tokens`;
+			const lines = [
+				`Arc profile: ${active ? "active" : "inactive"} for ${model ? `${model.provider}/${model.id}` : "(no model)"}`,
+				`thinking: ${level} (budget ${budget})${step ? `, tool steps: ${step}` : ""}`,
+				`reasoning replay: ${replayThinkingMode()}`,
+				"env: ARC_PROFILE=0|1, ARC_STEP_THINKING=<level>, ARC_REPLAY_THINKING=auto|all|last|none",
+			];
+			ctx.ui.notify(lines.join("\n"), "info");
+		},
 	});
 
 	pi.on("agent_end", (event, ctx) => {

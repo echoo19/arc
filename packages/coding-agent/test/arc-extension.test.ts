@@ -349,16 +349,32 @@ type Handler = (event: unknown, ctx: ExtensionContext) => unknown;
 function loadExtension() {
 	const handlers = new Map<string, Handler>();
 	const sendUserMessage = vi.fn();
+	const commands = new Map<string, { handler: (args: string, ctx: ExtensionContext) => unknown }>();
 	const api = {
 		on: (event: string, handler: Handler) => handlers.set(event, handler),
+		registerCommand: (name: string, command: { handler: (args: string, ctx: ExtensionContext) => unknown }) =>
+			commands.set(name, command),
 		sendUserMessage,
 		getThinkingLevel: () => "off",
 	} as unknown as ExtensionAPI;
 	arcExtension(api);
 	const ctxFor = (m: Model<Api> | undefined, thinkingLevel = "medium") =>
 		({ model: m, thinkingLevel, cwd: "/tmp" }) as unknown as ExtensionContext;
-	return { handlers, sendUserMessage, ctxFor };
+	return { handlers, commands, sendUserMessage, ctxFor };
 }
+
+describe("/arc command", () => {
+	it("reports profile status through ctx.ui.notify", async () => {
+		const { commands, ctxFor } = loadExtension();
+		const notify = vi.fn();
+		const ctx = { ...ctxFor(model(), "low"), ui: { notify } } as unknown as ExtensionContext;
+		await commands.get("arc")!.handler("", ctx);
+		expect(notify).toHaveBeenCalledTimes(1);
+		const text = notify.mock.calls[0]![0] as string;
+		expect(text).toContain("Arc profile: active for local/qwen3.6-35b-a3b");
+		expect(text).toContain("thinking: low (budget 1024 tokens)");
+	});
+});
 
 describe("arc extension hooks", () => {
 	const startEvent: BeforeAgentStartEvent = {
