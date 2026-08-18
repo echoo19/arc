@@ -1,13 +1,21 @@
 import type { ExtensionAPI } from "../../core/extensions/types.ts";
 import { isArcActive } from "./activation.ts";
-import { endedEmpty, endedWithAnnouncedAction, LoopGuard, normalizeToolArgs } from "./guards.ts";
+import {
+	endedEmpty,
+	endedTruncatedWithoutTools,
+	endedWithAnnouncedAction,
+	LoopGuard,
+	normalizeToolArgs,
+} from "./guards.ts";
 import { rewriteArcPayload } from "./payload.ts";
 import { buildArcSystemPrompt } from "./prompt.ts";
-import { pruneReplayedThinking, replayThinkingMode } from "./replay.ts";
+import { pruneReplayedThinking, replayThinkingMode, stubTruncatedResponses } from "./replay.ts";
 
 const BASH_DEFAULT_TIMEOUT_SECONDS = 120;
 const MAX_NUDGES = 2;
 const PROCEED = "Proceed with that step now using the tools; do not stop to announce it.";
+const TRUNCATED =
+	"Your previous response hit the output limit without calling a tool. Do not write file contents in your reply or at length in your reasoning: think briefly, then use the write tool (one file per call) or edit, run it, and continue.";
 const NUDGE =
 	"Continue with the task. If it is already complete, reply with a short summary of what you did and how you verified it.";
 
@@ -33,8 +41,13 @@ export default function arcExtension(pi: ExtensionAPI): void {
 
 	pi.on("context", (event, ctx) => {
 		if (!isArcActive(ctx.model)) return undefined;
-		const messages = pruneReplayedThinking(event.messages, replayThinkingMode(), ctx.getContextUsage()?.percent);
-		return messages ? { messages } : undefined;
+		const stubbed = stubTruncatedResponses(event.messages);
+		const messages = pruneReplayedThinking(
+			stubbed ?? event.messages,
+			replayThinkingMode(),
+			ctx.getContextUsage()?.percent,
+		);
+		return (messages ?? stubbed) ? { messages: messages ?? stubbed } : undefined;
 	});
 
 	pi.on("before_provider_request", (event, ctx) => {
@@ -60,10 +73,11 @@ export default function arcExtension(pi: ExtensionAPI): void {
 	pi.on("agent_end", (event, ctx) => {
 		if (!isArcActive(ctx.model) || nudges >= MAX_NUDGES) return;
 		const empty = endedEmpty(event.messages);
-		if (!empty && !endedWithAnnouncedAction(event.messages)) return;
+		const truncated = endedTruncatedWithoutTools(event.messages);
+		if (!empty && !truncated && !endedWithAnnouncedAction(event.messages)) return;
 		nudges++;
 		// The run is still active during agent_end, so this queues as a follow-up
 		// and the session continues with it instead of going idle.
-		pi.sendUserMessage(empty ? NUDGE : PROCEED, { deliverAs: "followUp" });
+		pi.sendUserMessage(truncated ? TRUNCATED : empty ? NUDGE : PROCEED, { deliverAs: "followUp" });
 	});
 }

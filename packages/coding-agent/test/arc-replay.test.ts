@@ -1,6 +1,11 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { describe, expect, it } from "vitest";
-import { pruneReplayedThinking, replayThinkingMode } from "../src/extensions/arc/replay.ts";
+import {
+	pruneReplayedThinking,
+	replayThinkingMode,
+	stubTruncatedResponses,
+	TRUNCATED_STUB,
+} from "../src/extensions/arc/replay.ts";
 
 function assistant(id: string, withThinking: boolean): AgentMessage {
 	return {
@@ -89,5 +94,31 @@ describe("pruneReplayedThinking", () => {
 		const pruned = pruneReplayedThinking(messages, "none", 0);
 		expect(pruned!.map(thinkingBlocks)).toEqual([0, 0, 0, 0, 0, 0, 0]);
 		expect(pruneReplayedThinking([user, assistant("1", false)], "none", 0)).toBeUndefined();
+	});
+});
+
+describe("stubTruncatedResponses", () => {
+	const truncated = {
+		...assistant("x", true),
+		stopReason: "length",
+		content: [
+			{ type: "thinking", thinking: "long draft", thinkingSignature: "reasoning_content" },
+			{ type: "text", text: "const a = 1; // ...thousands of tokens" },
+		],
+	} as AgentMessage;
+
+	it("replaces a length-stopped assistant message without tool calls by a stub", () => {
+		const out = stubTruncatedResponses([user, truncated]);
+		expect(out).toBeDefined();
+		expect((out![1] as { content: Array<{ type: string; text?: string }> }).content).toEqual([
+			{ type: "text", text: TRUNCATED_STUB },
+		]);
+		expect(stubTruncatedResponses(out!)).toBeUndefined();
+	});
+
+	it("leaves normal and tool-calling messages alone", () => {
+		expect(stubTruncatedResponses([user, assistant("1", true), toolResult("1")])).toBeUndefined();
+		const cut = { ...assistant("2", true), stopReason: "length" } as AgentMessage;
+		expect(stubTruncatedResponses([user, cut])).toBeUndefined();
 	});
 });

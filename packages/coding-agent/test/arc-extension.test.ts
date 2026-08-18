@@ -10,7 +10,13 @@ import type {
 	ToolResultEvent,
 } from "../src/core/extensions/types.ts";
 import { isArcActive } from "../src/extensions/arc/activation.ts";
-import { endedEmpty, endedWithAnnouncedAction, LoopGuard, normalizeToolArgs } from "../src/extensions/arc/guards.ts";
+import {
+	endedEmpty,
+	endedTruncatedWithoutTools,
+	endedWithAnnouncedAction,
+	LoopGuard,
+	normalizeToolArgs,
+} from "../src/extensions/arc/guards.ts";
 import arcExtension from "../src/extensions/arc/index.ts";
 import {
 	isToolStep,
@@ -113,8 +119,8 @@ describe("buildArcSystemPrompt", () => {
 
 	it("stays compact", () => {
 		const prompt = buildArcSystemPrompt({ ...options, contextFiles: [] }, "win32");
-		// ~4 chars per token; 450 tokens budget.
-		expect(prompt.length).toBeLessThan(450 * 4);
+		// ~4 chars per token; 500 tokens budget (upstream default is ~700 plus a ~280-token docs block).
+		expect(prompt.length).toBeLessThan(500 * 4);
 	});
 });
 
@@ -311,6 +317,18 @@ describe("endedWithAnnouncedAction", () => {
 				]),
 			]),
 		).toBe(false);
+	});
+});
+
+describe("endedTruncatedWithoutTools", () => {
+	it("detects a length stop without tool calls", () => {
+		expect(endedTruncatedWithoutTools([assistant([{ type: "text", text: "code..." }], "length")])).toBe(true);
+		expect(
+			endedTruncatedWithoutTools([
+				assistant([{ type: "toolCall", id: "1", name: "write", arguments: {} }], "length"),
+			]),
+		).toBe(false);
+		expect(endedTruncatedWithoutTools([assistant([{ type: "text", text: "done" }], "stop")])).toBe(false);
 	});
 });
 

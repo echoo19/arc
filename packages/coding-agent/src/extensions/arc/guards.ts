@@ -89,6 +89,16 @@ export function endedWithAnnouncedAction(messages: AgentMessage[]): boolean {
 	return text.length > 0 && text.length < 600 && ANNOUNCED_ACTION.test(text);
 }
 
+/**
+ * True when the run stopped because the response hit the output limit without
+ * a single tool call: the model wrote a whole file (or its reasoning) as text.
+ */
+export function endedTruncatedWithoutTools(messages: AgentMessage[]): boolean {
+	const last = lastAssistant(messages);
+	if (!last || last.stopReason !== "length") return false;
+	return !last.content.some((block) => block.type === "toolCall");
+}
+
 function lastAssistant(messages: AgentMessage[]): AssistantMessage | undefined {
 	for (let i = messages.length - 1; i >= 0; i--) {
 		const message = messages[i];

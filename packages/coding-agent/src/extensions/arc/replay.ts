@@ -54,3 +54,28 @@ export function pruneReplayedThinking(
 	});
 	return changed ? pruned : undefined;
 }
+
+export const TRUNCATED_STUB =
+	"[This response was cut off by the output limit before any tool call: code was written as plain text or drafted at length in reasoning. It has been removed from the context. Use the write tool for file contents and keep reasoning short.]";
+
+/**
+ * Replaces assistant messages that hit the output limit without a tool call by
+ * a short stub, so a runaway text response does not occupy the context window
+ * on later requests. Returns undefined when nothing changed.
+ */
+export function stubTruncatedResponses(messages: AgentMessage[]): AgentMessage[] | undefined {
+	let changed = false;
+	const result = messages.map((message) => {
+		if (message.role !== "assistant" || message.stopReason !== "length") return message;
+		if (message.content.some((block) => block.type === "toolCall")) return message;
+		if (
+			message.content.length === 1 &&
+			message.content[0]?.type === "text" &&
+			message.content[0].text === TRUNCATED_STUB
+		)
+			return message;
+		changed = true;
+		return { ...message, content: [{ type: "text" as const, text: TRUNCATED_STUB }] };
+	});
+	return changed ? result : undefined;
+}
