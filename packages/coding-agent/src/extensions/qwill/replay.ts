@@ -18,9 +18,7 @@ export type ReplayThinkingMode = "all" | "last" | "none" | "auto";
 
 export const AUTO_THRESHOLD_PERCENT = 50;
 
-export function replayThinkingMode(
-	value: string | undefined = process.env.PI_QWEN_REPLAY_THINKING,
-): ReplayThinkingMode {
+export function replayThinkingMode(value: string | undefined = process.env.QWILL_REPLAY_THINKING): ReplayThinkingMode {
 	const normalized = value?.trim().toLowerCase();
 	return normalized === "all" || normalized === "last" || normalized === "none" ? normalized : "auto";
 }

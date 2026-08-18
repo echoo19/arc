@@ -9,21 +9,16 @@ import type {
 	ToolCallEvent,
 	ToolResultEvent,
 } from "../src/core/extensions/types.ts";
-import { isQwenLocalActive } from "../src/extensions/qwen-local/activation.ts";
-import {
-	endedEmpty,
-	endedWithAnnouncedAction,
-	LoopGuard,
-	normalizeToolArgs,
-} from "../src/extensions/qwen-local/guards.ts";
-import qwenLocalExtension from "../src/extensions/qwen-local/index.ts";
+import { isQwillActive } from "../src/extensions/qwill/activation.ts";
+import { endedEmpty, endedWithAnnouncedAction, LoopGuard, normalizeToolArgs } from "../src/extensions/qwill/guards.ts";
+import qwillExtension from "../src/extensions/qwill/index.ts";
 import {
 	isToolStep,
 	QWEN_SAMPLING,
-	rewriteQwenPayload,
+	rewriteQwillPayload,
 	stepThinkingLevelFromEnv,
-} from "../src/extensions/qwen-local/payload.ts";
-import { buildQwenSystemPrompt } from "../src/extensions/qwen-local/prompt.ts";
+} from "../src/extensions/qwill/payload.ts";
+import { buildQwillSystemPrompt } from "../src/extensions/qwill/prompt.ts";
 
 function model(overrides: Partial<Model<Api>> = {}): Model<Api> {
 	return {
@@ -61,37 +56,37 @@ function assistant(content: unknown[], stopReason = "stop"): AgentMessage {
 	} as AgentMessage;
 }
 
-describe("qwen-local activation", () => {
+describe("qwill activation", () => {
 	it("activates for local providers and qwen ids on openai-completions", () => {
-		expect(isQwenLocalActive(model(), undefined)).toBe(true);
-		expect(isQwenLocalActive(model({ provider: "llama.cpp", id: "gemma" }), undefined)).toBe(true);
+		expect(isQwillActive(model(), undefined)).toBe(true);
+		expect(isQwillActive(model({ provider: "llama.cpp", id: "gemma" }), undefined)).toBe(true);
 		expect(
-			isQwenLocalActive(
+			isQwillActive(
 				model({ provider: "vllm", id: "Qwen/Qwen3-Coder", baseUrl: "http://localhost:8000/v1" }),
 				undefined,
 			),
 		).toBe(true);
 		expect(
-			isQwenLocalActive(
+			isQwillActive(
 				model({ provider: "openrouter", id: "qwen/qwen3-coder", baseUrl: "https://openrouter.ai/api/v1" }),
 				undefined,
 			),
 		).toBe(false);
-		expect(isQwenLocalActive(model({ provider: "openai", id: "gpt-5" }), undefined)).toBe(false);
-		expect(isQwenLocalActive(model({ api: "anthropic-messages" }), undefined)).toBe(false);
-		expect(isQwenLocalActive(undefined, undefined)).toBe(false);
+		expect(isQwillActive(model({ provider: "openai", id: "gpt-5" }), undefined)).toBe(false);
+		expect(isQwillActive(model({ api: "anthropic-messages" }), undefined)).toBe(false);
+		expect(isQwillActive(undefined, undefined)).toBe(false);
 	});
 
-	it("honours PI_QWEN_PROFILE", () => {
-		expect(isQwenLocalActive(model(), "0")).toBe(false);
-		expect(isQwenLocalActive(model(), "off")).toBe(false);
-		expect(isQwenLocalActive(model({ provider: "openai", id: "gpt-5" }), "1")).toBe(true);
-		expect(isQwenLocalActive(model({ provider: "openai", id: "gpt-5" }), "on")).toBe(true);
-		expect(isQwenLocalActive(model({ api: "anthropic-messages" }), "on")).toBe(false);
+	it("honours QWILL_PROFILE", () => {
+		expect(isQwillActive(model(), "0")).toBe(false);
+		expect(isQwillActive(model(), "off")).toBe(false);
+		expect(isQwillActive(model({ provider: "openai", id: "gpt-5" }), "1")).toBe(true);
+		expect(isQwillActive(model({ provider: "openai", id: "gpt-5" }), "on")).toBe(true);
+		expect(isQwillActive(model({ api: "anthropic-messages" }), "on")).toBe(false);
 	});
 });
 
-describe("buildQwenSystemPrompt", () => {
+describe("buildQwillSystemPrompt", () => {
 	const options = {
 		cwd: "C:\\work\\proj",
 		selectedTools: ["read", "bash", "edit"],
@@ -101,7 +96,7 @@ describe("buildQwenSystemPrompt", () => {
 	};
 
 	it("lists tools, keeps the rules, and appends project context and cwd", () => {
-		const prompt = buildQwenSystemPrompt(options, "linux");
+		const prompt = buildQwillSystemPrompt(options, "linux");
 		expect(prompt).toContain("- read: Read a file");
 		expect(prompt).toContain("- edit: Edit a file");
 		expect(prompt).toContain("Never repeat a tool call with identical arguments");
@@ -113,17 +108,17 @@ describe("buildQwenSystemPrompt", () => {
 	});
 
 	it("adds the Git Bash note on Windows", () => {
-		expect(buildQwenSystemPrompt(options, "win32")).toContain("Git Bash on Windows");
+		expect(buildQwillSystemPrompt(options, "win32")).toContain("Git Bash on Windows");
 	});
 
 	it("stays compact", () => {
-		const prompt = buildQwenSystemPrompt({ ...options, contextFiles: [] }, "win32");
+		const prompt = buildQwillSystemPrompt({ ...options, contextFiles: [] }, "win32");
 		// ~4 chars per token; 450 tokens budget.
 		expect(prompt.length).toBeLessThan(450 * 4);
 	});
 });
 
-describe("rewriteQwenPayload", () => {
+describe("rewriteQwillPayload", () => {
 	const base = () => ({
 		model: "qwen3.6-35b-a3b",
 		messages: [{ role: "user", content: "hi" }],
@@ -133,13 +128,13 @@ describe("rewriteQwenPayload", () => {
 	});
 
 	it("ignores non chat payloads", () => {
-		expect(rewriteQwenPayload({ input: [] }, "medium")).toBeUndefined();
-		expect(rewriteQwenPayload("x", "medium")).toBeUndefined();
+		expect(rewriteQwillPayload({ input: [] }, "medium")).toBeUndefined();
+		expect(rewriteQwillPayload("x", "medium")).toBeUndefined();
 	});
 
 	it("disables thinking and applies instant sampling when off", () => {
 		const payload = base();
-		const result = rewriteQwenPayload(payload, "off") as Record<string, unknown>;
+		const result = rewriteQwillPayload(payload, "off") as Record<string, unknown>;
 		expect(result).toBe(payload);
 		expect(result.chat_template_kwargs).toEqual({ enable_thinking: false, preserve_thinking: false });
 		expect(result.thinking_budget_tokens).toBeUndefined();
@@ -156,22 +151,22 @@ describe("rewriteQwenPayload", () => {
 	});
 
 	it("treats undefined level as off", () => {
-		const result = rewriteQwenPayload(base(), undefined) as Record<string, unknown>;
+		const result = rewriteQwillPayload(base(), undefined) as Record<string, unknown>;
 		expect(result.chat_template_kwargs).toEqual({ enable_thinking: false, preserve_thinking: false });
 	});
 
 	it("enables thinking with a clamped budget and thinking sampling", () => {
-		const result = rewriteQwenPayload(base(), "medium") as Record<string, unknown>;
+		const result = rewriteQwillPayload(base(), "medium") as Record<string, unknown>;
 		expect(result.chat_template_kwargs).toEqual({ enable_thinking: true, preserve_thinking: false });
 		expect(result.thinking_budget_tokens).toBe(3072);
 		expect(result.temperature).toBe(QWEN_SAMPLING.thinking.temperature);
 		expect(result.top_p).toBe(QWEN_SAMPLING.thinking.top_p);
 
-		const high = rewriteQwenPayload({ ...base(), max_tokens: 4096 }, "high") as Record<string, unknown>;
+		const high = rewriteQwillPayload({ ...base(), max_tokens: 4096 }, "high") as Record<string, unknown>;
 		expect(high.thinking_budget_tokens).toBe(3072);
-		const tiny = rewriteQwenPayload({ ...base(), max_tokens: 512 }, "max") as Record<string, unknown>;
+		const tiny = rewriteQwillPayload({ ...base(), max_tokens: 512 }, "max") as Record<string, unknown>;
 		expect(tiny.thinking_budget_tokens).toBe(256);
-		const noMax = rewriteQwenPayload({ ...base(), max_tokens: undefined }, "max") as Record<string, unknown>;
+		const noMax = rewriteQwillPayload({ ...base(), max_tokens: undefined }, "max") as Record<string, unknown>;
 		expect(noMax.thinking_budget_tokens).toBe(7168);
 	});
 
@@ -183,7 +178,7 @@ describe("rewriteQwenPayload", () => {
 			thinking_budget_tokens: 100,
 			chat_template_kwargs: { foo: "bar", enable_thinking: false },
 		};
-		const result = rewriteQwenPayload(payload, "low") as Record<string, unknown>;
+		const result = rewriteQwillPayload(payload, "low") as Record<string, unknown>;
 		expect(result.temperature).toBe(0.2);
 		expect(result.presence_penalty).toBe(1.5);
 		expect(result.thinking_budget_tokens).toBe(100);
@@ -193,7 +188,7 @@ describe("rewriteQwenPayload", () => {
 });
 
 describe("step thinking level", () => {
-	it("parses PI_QWEN_STEP_THINKING", () => {
+	it("parses QWILL_STEP_THINKING", () => {
 		expect(stepThinkingLevelFromEnv(undefined)).toBeUndefined();
 		expect(stepThinkingLevelFromEnv("bogus")).toBeUndefined();
 		expect(stepThinkingLevelFromEnv(" Low ")).toBe("low");
@@ -208,13 +203,13 @@ describe("step thinking level", () => {
 
 	it("uses the step level mid tool loop and the turn level otherwise", () => {
 		const turn = { messages: [{ role: "user" }], max_tokens: 8192 };
-		expect((rewriteQwenPayload(turn, "high", "low") as Record<string, unknown>).thinking_budget_tokens).toBe(6144);
+		expect((rewriteQwillPayload(turn, "high", "low") as Record<string, unknown>).thinking_budget_tokens).toBe(6144);
 		const step = { messages: [{ role: "user" }, { role: "assistant" }, { role: "tool" }], max_tokens: 8192 };
-		expect((rewriteQwenPayload(step, "high", "low") as Record<string, unknown>).thinking_budget_tokens).toBe(1024);
+		expect((rewriteQwillPayload(step, "high", "low") as Record<string, unknown>).thinking_budget_tokens).toBe(1024);
 		const fresh = () => ({ messages: [{ role: "user" }, { role: "assistant" }, { role: "tool" }], max_tokens: 8192 });
-		const off = rewriteQwenPayload(fresh(), "high", "off") as Record<string, unknown>;
+		const off = rewriteQwillPayload(fresh(), "high", "off") as Record<string, unknown>;
 		expect(off.chat_template_kwargs).toEqual({ enable_thinking: false, preserve_thinking: false });
-		const none = rewriteQwenPayload(fresh(), "high", undefined) as Record<string, unknown>;
+		const none = rewriteQwillPayload(fresh(), "high", undefined) as Record<string, unknown>;
 		expect(none.thinking_budget_tokens).toBe(6144);
 	});
 });
@@ -341,13 +336,13 @@ function loadExtension() {
 		sendUserMessage,
 		getThinkingLevel: () => "off",
 	} as unknown as ExtensionAPI;
-	qwenLocalExtension(api);
+	qwillExtension(api);
 	const ctxFor = (m: Model<Api> | undefined, thinkingLevel = "medium") =>
 		({ model: m, thinkingLevel, cwd: "/tmp" }) as unknown as ExtensionContext;
 	return { handlers, sendUserMessage, ctxFor };
 }
 
-describe("qwen-local extension hooks", () => {
+describe("qwill extension hooks", () => {
 	const startEvent: BeforeAgentStartEvent = {
 		type: "before_agent_start",
 		prompt: "go",
