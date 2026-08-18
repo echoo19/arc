@@ -53,8 +53,24 @@ export function normalizeForFuzzyMatch(text: string): string {
 	);
 }
 
+/**
+ * Normalize text for indentation-insensitive matching: fuzzy normalization
+ * plus stripping the leading whitespace of every line.
+ */
+export function normalizeForIndentInsensitiveMatch(text: string): string {
+	return normalizeForFuzzyMatch(text)
+		.split("\n")
+		.map((line) => line.trimStart())
+		.join("\n");
+}
+
 function splitLinesWithEndings(content: string): string[] {
 	return content.match(/[^\n]*\n|[^\n]+/g) ?? [];
+}
+
+/** Leading whitespace of a line, not counting its line ending (a blank line yields ""). */
+function getLeadingWhitespace(line: string): string {
+	return /^[^\S\n]*/.exec(line)?.[0] ?? "";
 }
 
 interface LineSpan {
@@ -171,20 +187,30 @@ export function applyReplacementsPreservingUnchangedLines(
 	return result;
 }
 
+/**
+ * Matching tiers, tried in order. Each tier normalizes both the file content
+ * and oldText the same way before an `indexOf` search:
+ * - exact: no normalization
+ * - fuzzy: trailing whitespace, Unicode quotes/dashes/spaces (see normalizeForFuzzyMatch)
+ * - indent: fuzzy plus leading whitespace of every line
+ */
+export type MatchTier = "exact" | "fuzzy" | "indent";
+
+const MATCH_TIERS: MatchTier[] = ["exact", "fuzzy", "indent"];
+
+function normalizeForTier(text: string, tier: MatchTier): string {
+	if (tier === "exact") return text;
+	if (tier === "fuzzy") return normalizeForFuzzyMatch(text);
+	return normalizeForIndentInsensitiveMatch(text);
+}
+
 export interface FuzzyMatchResult {
-	/** Whether a match was found */
-	found: boolean;
-	/** The index where the match starts (in the content that should be used for replacement) */
+	/** The tier at which oldText was found */
+	tier: MatchTier;
+	/** The index where the match starts, in the content normalized for `tier` */
 	index: number;
-	/** Length of the matched text */
+	/** Length of the matched text, in the content normalized for `tier` */
 	matchLength: number;
-	/** Whether fuzzy matching was used (false = exact match) */
-	usedFuzzyMatch: boolean;
-	/**
-	 * The content to use for replacement operations.
-	 * When exact match: original content. When fuzzy match: normalized content.
-	 */
-	contentForReplacement: string;
 }
 
 export interface Edit {
@@ -198,49 +224,18 @@ export interface AppliedEditsResult {
 }
 
 /**
- * Find oldText in content, trying exact match first, then fuzzy match.
- * When fuzzy matching is used, the returned contentForReplacement is the
- * fuzzy-normalized version of the content (trailing whitespace stripped,
- * Unicode quotes/dashes normalized to ASCII).
+ * Find oldText in content, trying exact match first, then fuzzy match, then
+ * indentation-insensitive match. Returns undefined when no tier matches.
  */
-export function fuzzyFindText(content: string, oldText: string): FuzzyMatchResult {
-	// Try exact match first
-	const exactIndex = content.indexOf(oldText);
-	if (exactIndex !== -1) {
-		return {
-			found: true,
-			index: exactIndex,
-			matchLength: oldText.length,
-			usedFuzzyMatch: false,
-			contentForReplacement: content,
-		};
+export function fuzzyFindText(content: string, oldText: string): FuzzyMatchResult | undefined {
+	for (const tier of MATCH_TIERS) {
+		const normalizedOldText = normalizeForTier(oldText, tier);
+		const index = normalizeForTier(content, tier).indexOf(normalizedOldText);
+		if (index !== -1) {
+			return { tier, index, matchLength: normalizedOldText.length };
+		}
 	}
-
-	// Try fuzzy match - work entirely in normalized space
-	const fuzzyContent = normalizeForFuzzyMatch(content);
-	const fuzzyOldText = normalizeForFuzzyMatch(oldText);
-	const fuzzyIndex = fuzzyContent.indexOf(fuzzyOldText);
-
-	if (fuzzyIndex === -1) {
-		return {
-			found: false,
-			index: -1,
-			matchLength: 0,
-			usedFuzzyMatch: false,
-			contentForReplacement: content,
-		};
-	}
-
-	// When fuzzy matching, return offsets in normalized space. Callers can use
-	// the normalized content to compute replacements, then decide how much of
-	// that normalized output should be written back.
-	return {
-		found: true,
-		index: fuzzyIndex,
-		matchLength: fuzzyOldText.length,
-		usedFuzzyMatch: true,
-		contentForReplacement: fuzzyContent,
-	};
+	return undefined;
 }
 
 /** Strip UTF-8 BOM if present, return both the BOM (if any) and the text without it */
@@ -248,20 +243,173 @@ export function stripBom(content: string): { bom: string; text: string } {
 	return content.startsWith("\uFEFF") ? { bom: "\uFEFF", text: content.slice(1) } : { bom: "", text: content };
 }
 
-function countOccurrences(content: string, oldText: string): number {
-	const fuzzyContent = normalizeForFuzzyMatch(content);
-	const fuzzyOldText = normalizeForFuzzyMatch(oldText);
-	return fuzzyContent.split(fuzzyOldText).length - 1;
+/**
+ * Re-indent newText so that it uses the file's indentation instead of the
+ * indentation the model used in oldText. `oldIndent` and `fileIndent` are the
+ * leading whitespace of the same reference line in oldText and in the file.
+ * Lines from `fromLine` onwards that share `oldIndent` get it swapped for
+ * `fileIndent`; when both indents are a single repeated character (all tabs or
+ * all spaces) uniform leading whitespace is scaled instead, so nested lines keep
+ * their relative depth (two tabs become eight spaces for a four-space file).
+ * Other lines are left unchanged.
+ */
+function reindentText(newText: string, oldIndent: string, fileIndent: string, fromLine: number): string {
+	if (oldIndent === fileIndent) return newText;
+	const uniform = (ws: string) => ws.length > 0 && ws === ws[0].repeat(ws.length);
+	const scalable = uniform(oldIndent) && uniform(fileIndent);
+	return newText
+		.split("\n")
+		.map((line, i) => {
+			if (i < fromLine || line.trim().length === 0) return line;
+			const leading = getLeadingWhitespace(line);
+			const rest = line.slice(leading.length);
+			if (scalable && uniform(leading) && leading[0] === oldIndent[0] && leading.length % oldIndent.length === 0) {
+				return fileIndent[0].repeat((leading.length / oldIndent.length) * fileIndent.length) + rest;
+			}
+			return leading.startsWith(oldIndent) ? fileIndent + leading.slice(oldIndent.length) + rest : line;
+		})
+		.join("\n");
 }
 
-function getNotFoundError(path: string, editIndex: number, totalEdits: number): Error {
-	if (totalEdits === 1) {
-		return new Error(
-			`Could not find the exact text in ${path}. The old text must match exactly including all whitespace and newlines.`,
-		);
+/**
+ * Translate a match found in indentation-insensitive space into a replacement
+ * in fuzzy space (which keeps the file's leading whitespace), and re-indent
+ * newText to the file's indentation. Both spaces have identical line
+ * structure; a stripped line is the fuzzy line minus its leading whitespace, so
+ * offsets map line by line. A match starting at column 0 is widened to include
+ * the line's indentation, which the re-indented newText then supplies itself.
+ */
+function translateIndentMatch(
+	fuzzyContent: string,
+	indentContent: string,
+	oldText: string,
+	newText: string,
+	match: FuzzyMatchResult,
+): TextReplacement {
+	const fuzzyLines = splitLinesWithEndings(fuzzyContent);
+	const fuzzySpans = getLineSpans(fuzzyContent);
+	const indentSpans = getLineSpans(indentContent);
+
+	const locate = (offset: number): { line: number; column: number } => {
+		const line =
+			offset >= indentContent.length
+				? indentSpans.length - 1
+				: indentSpans.findIndex((span) => offset >= span.start && offset < span.end);
+		return { line, column: offset - indentSpans[line].start };
+	};
+	// Column 0 maps to the fuzzy line start so the match includes (or, for the
+	// end offset, excludes) that line's indentation.
+	const toFuzzyOffset = ({ line, column }: { line: number; column: number }): number =>
+		fuzzySpans[line].start + (column === 0 ? 0 : getLeadingWhitespace(fuzzyLines[line]).length + column);
+
+	const start = locate(match.index);
+	const end = locate(match.index + match.matchLength);
+	const fuzzyStart = toFuzzyOffset(start);
+	const fuzzyEnd = toFuzzyOffset(end);
+
+	// Only newText lines that start at a line boundary in the file are re-indented:
+	// all of them when the match starts at column 0, otherwise all but the first.
+	// The reference line is the first non-blank oldText line among those (blank
+	// lines carry no indentation).
+	const oldLines = oldText.split("\n");
+	const fromLine = start.column === 0 ? 0 : 1;
+	let refLine = fromLine;
+	while (refLine < oldLines.length && oldLines[refLine].trim().length === 0) refLine++;
+	const fileRefLine = fuzzyLines[start.line + refLine];
+	const reindented =
+		oldLines.length > refLine && fileRefLine !== undefined
+			? reindentText(newText, getLeadingWhitespace(oldLines[refLine]), getLeadingWhitespace(fileRefLine), fromLine)
+			: newText;
+
+	return { matchIndex: fuzzyStart, matchLength: fuzzyEnd - fuzzyStart, newText: reindented };
+}
+
+function bigrams(text: string): Map<string, number> {
+	const result = new Map<string, number>();
+	for (let i = 0; i + 1 < text.length; i++) {
+		const gram = text.slice(i, i + 2);
+		result.set(gram, (result.get(gram) ?? 0) + 1);
 	}
+	return result;
+}
+
+/** Sorensen-Dice similarity of character bigrams, in [0, 1]. */
+function lineSimilarity(a: string, b: string): number {
+	if (a === b) return 1;
+	if (a.length < 2 || b.length < 2) return 0;
+	const gramsA = bigrams(a);
+	const gramsB = bigrams(b);
+	let shared = 0;
+	for (const [gram, count] of gramsA) {
+		shared += Math.min(count, gramsB.get(gram) ?? 0);
+	}
+	return (2 * shared) / (a.length - 1 + b.length - 1);
+}
+
+const CLOSEST_MATCH_MIN_SIMILARITY = 0.4;
+const CLOSEST_MATCH_MAX_CHARS = 600;
+const CLOSEST_MATCH_MAX_LINES = 7;
+
+/**
+ * Find the region of `content` that most resembles the start of `oldText`, for
+ * not-found error hints. Compares up to three leading oldText lines against
+ * every aligned window of file lines (trimmed, fuzzy-normalized) using bigram
+ * similarity. Returns a numbered snippet, or undefined when nothing is close.
+ */
+export function findClosestMatch(
+	content: string,
+	oldText: string,
+): { startLine: number; endLine: number; snippet: string } | undefined {
+	const contentLines = content.split("\n");
+	if (contentLines[contentLines.length - 1] === "") contentLines.pop();
+	const oldLines = normalizeForIndentInsensitiveMatch(oldText).split("\n");
+	while (oldLines.length > 0 && oldLines[0] === "") oldLines.shift();
+	while (oldLines.length > 0 && oldLines[oldLines.length - 1] === "") oldLines.pop();
+	const probe = oldLines.slice(0, 3);
+	if (probe.length === 0) return undefined;
+
+	const trimmedLines = normalizeForIndentInsensitiveMatch(content).split("\n");
+	let bestIndex = -1;
+	let bestScore = 0;
+	for (let i = 0; i < trimmedLines.length; i++) {
+		let score = 0;
+		for (let j = 0; j < probe.length; j++) {
+			score += lineSimilarity(probe[j], trimmedLines[i + j] ?? "");
+		}
+		score /= probe.length;
+		if (score > bestScore) {
+			bestScore = score;
+			bestIndex = i;
+		}
+	}
+	if (bestIndex === -1 || bestScore < CLOSEST_MATCH_MIN_SIMILARITY) return undefined;
+
+	const lineCount = Math.min(oldLines.length + 2, CLOSEST_MATCH_MAX_LINES, contentLines.length - bestIndex);
+	const snippetLines: string[] = [];
+	let chars = 0;
+	for (let i = bestIndex; i < bestIndex + lineCount; i++) {
+		const line = `${i + 1}: ${contentLines[i]}`;
+		if (snippetLines.length > 0 && chars + line.length > CLOSEST_MATCH_MAX_CHARS) break;
+		snippetLines.push(line.length > CLOSEST_MATCH_MAX_CHARS ? `${line.slice(0, CLOSEST_MATCH_MAX_CHARS)}...` : line);
+		chars += line.length + 1;
+	}
+	return { startLine: bestIndex + 1, endLine: bestIndex + snippetLines.length, snippet: snippetLines.join("\n") };
+}
+
+function getNotFoundError(
+	path: string,
+	content: string,
+	oldText: string,
+	editIndex: number,
+	totalEdits: number,
+): Error {
+	const subject = totalEdits === 1 ? "the exact text" : `edits[${editIndex}]`;
+	const closest = findClosestMatch(content, oldText);
+	const hint = closest
+		? `\nClosest match in ${path} at lines ${closest.startLine}-${closest.endLine} (line numbers are not part of the file):\n${closest.snippet}\nCopy the text to replace verbatim from the file (use read), including indentation.`
+		: "";
 	return new Error(
-		`Could not find edits[${editIndex}] in ${path}. The oldText must match exactly including all whitespace and newlines.`,
+		`Could not find ${subject} in ${path}. Differences in trailing whitespace and indentation are tolerated, but the text itself must appear verbatim and be unique in the file.${hint}`,
 	);
 }
 
@@ -296,10 +444,13 @@ function getNoChangeError(path: string, totalEdits: number): Error {
  * Apply one or more exact-text replacements to LF-normalized content.
  *
  * All edits are matched against the same original content. Replacements are
- * then applied in reverse order so offsets remain stable. If any edit needs
- * fuzzy matching, the operation runs in fuzzy-normalized content space and then
- * overlays those line-level changes onto the original content so unchanged line
- * blocks keep their original bytes.
+ * then applied in reverse order so offsets remain stable. If any edit needs a
+ * tier beyond exact (see MatchTier), all offsets live in fuzzy space: the
+ * replacements are applied in fuzzy-normalized content and the touched lines
+ * are overlaid onto the original content, so unchanged line blocks keep their
+ * original bytes. Edits that need the indent tier are matched with leading
+ * whitespace stripped, then translated into fuzzy space with newText
+ * re-indented to the file's indentation.
  */
 export function applyEditsToNormalizedContent(
 	normalizedContent: string,
@@ -317,29 +468,48 @@ export function applyEditsToNormalizedContent(
 		}
 	}
 
-	const initialMatches = normalizedEdits.map((edit) => fuzzyFindText(normalizedContent, edit.oldText));
-	const usedFuzzyMatch = initialMatches.some((match) => match.usedFuzzyMatch);
-	const replacementBaseContent = usedFuzzyMatch ? normalizeForFuzzyMatch(normalizedContent) : normalizedContent;
+	let tier: MatchTier = "exact";
+	const editTiers: MatchTier[] = [];
+	for (let i = 0; i < normalizedEdits.length; i++) {
+		const match = fuzzyFindText(normalizedContent, normalizedEdits[i].oldText);
+		if (!match) {
+			throw getNotFoundError(path, normalizedContent, normalizedEdits[i].oldText, i, normalizedEdits.length);
+		}
+		editTiers.push(match.tier);
+		if (MATCH_TIERS.indexOf(match.tier) > MATCH_TIERS.indexOf(tier)) tier = match.tier;
+	}
+
+	const replacementBaseContent = tier === "exact" ? normalizedContent : normalizeForFuzzyMatch(normalizedContent);
+	const indentContent = tier === "indent" ? normalizeForIndentInsensitiveMatch(normalizedContent) : "";
 
 	const matchedEdits: MatchedEdit[] = [];
 	for (let i = 0; i < normalizedEdits.length; i++) {
 		const edit = normalizedEdits[i];
-		const matchResult = fuzzyFindText(replacementBaseContent, edit.oldText);
-		if (!matchResult.found) {
-			throw getNotFoundError(path, i, normalizedEdits.length);
+		// Edits that did not need the indent tier are matched in the replacement
+		// base (fuzzy space unless every edit matched exactly), so an edit that is
+		// unique in the file is not reported ambiguous just because another edit
+		// needed indentation-insensitive matching.
+		const editTier: MatchTier = editTiers[i] === "indent" ? "indent" : tier === "exact" ? "exact" : "fuzzy";
+		const matchContent = editTier === "indent" ? indentContent : replacementBaseContent;
+		const matchOldText = normalizeForTier(edit.oldText, editTier);
+		const occurrences = matchContent.split(matchOldText).length - 1;
+		if (occurrences === 0) {
+			throw getNotFoundError(path, normalizedContent, edit.oldText, i, normalizedEdits.length);
 		}
-
-		const occurrences = countOccurrences(replacementBaseContent, edit.oldText);
 		if (occurrences > 1) {
 			throw getDuplicateError(path, i, normalizedEdits.length, occurrences);
 		}
 
-		matchedEdits.push({
-			editIndex: i,
-			matchIndex: matchResult.index,
-			matchLength: matchResult.matchLength,
-			newText: edit.newText,
-		});
+		const match: FuzzyMatchResult = {
+			tier: editTier,
+			index: matchContent.indexOf(matchOldText),
+			matchLength: matchOldText.length,
+		};
+		const replacement =
+			editTier === "indent"
+				? translateIndentMatch(replacementBaseContent, matchContent, edit.oldText, edit.newText, match)
+				: { matchIndex: match.index, matchLength: match.matchLength, newText: edit.newText };
+		matchedEdits.push({ editIndex: i, ...replacement });
 	}
 
 	matchedEdits.sort((a, b) => a.matchIndex - b.matchIndex);
@@ -354,9 +524,10 @@ export function applyEditsToNormalizedContent(
 	}
 
 	const baseContent = normalizedContent;
-	const newContent = usedFuzzyMatch
-		? applyReplacementsPreservingUnchangedLines(normalizedContent, replacementBaseContent, matchedEdits)
-		: applyReplacements(replacementBaseContent, matchedEdits);
+	const newContent =
+		tier === "exact"
+			? applyReplacements(replacementBaseContent, matchedEdits)
+			: applyReplacementsPreservingUnchangedLines(normalizedContent, replacementBaseContent, matchedEdits);
 
 	if (baseContent === newContent) {
 		throw getNoChangeError(path, normalizedEdits.length);

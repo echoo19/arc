@@ -14,6 +14,7 @@ import {
 	findCutPoint,
 	getLastAssistantUsage,
 	prepareCompaction,
+	resolveCompactionSettings,
 	shouldCompact,
 } from "../src/core/compaction/index.ts";
 import {
@@ -304,6 +305,46 @@ describe("shouldCompact", () => {
 
 		expect(shouldCompact(95000, 100000, settings)).toBe(false);
 	});
+
+	it("uses the scaled reserve on small context windows", () => {
+		// 32k window: reserve scales from 16384 to 8192, so the threshold is 24576, not 16384
+		expect(shouldCompact(20000, 32768, DEFAULT_COMPACTION_SETTINGS)).toBe(false);
+		expect(shouldCompact(24576, 32768, DEFAULT_COMPACTION_SETTINGS)).toBe(false);
+		expect(shouldCompact(24577, 32768, DEFAULT_COMPACTION_SETTINGS)).toBe(true);
+	});
+});
+
+describe("resolveCompactionSettings", () => {
+	it("scales the default budgets down for a 32k window", () => {
+		expect(resolveCompactionSettings(DEFAULT_COMPACTION_SETTINGS, 32768)).toEqual({
+			enabled: true,
+			reserveTokens: 8192,
+			keepRecentTokens: 12288,
+		});
+	});
+
+	it("keeps the defaults on large windows", () => {
+		expect(resolveCompactionSettings(DEFAULT_COMPACTION_SETTINGS, 200000)).toBe(DEFAULT_COMPACTION_SETTINGS);
+	});
+
+	it("scales a 16k window and keeps the 2048 floor", () => {
+		expect(resolveCompactionSettings(DEFAULT_COMPACTION_SETTINGS, 16384)).toEqual({
+			enabled: true,
+			reserveTokens: 4096,
+			keepRecentTokens: 6144,
+		});
+		expect(resolveCompactionSettings(DEFAULT_COMPACTION_SETTINGS, 4096)).toEqual({
+			enabled: true,
+			reserveTokens: 2048,
+			keepRecentTokens: 2048,
+		});
+	});
+
+	it("never raises configured values and ignores unknown windows", () => {
+		const small: CompactionSettings = { enabled: true, reserveTokens: 4000, keepRecentTokens: 6000 };
+		expect(resolveCompactionSettings(small, 32768)).toBe(small);
+		expect(resolveCompactionSettings(DEFAULT_COMPACTION_SETTINGS, 0)).toBe(DEFAULT_COMPACTION_SETTINGS);
+	});
 });
 
 describe("findCutPoint", () => {
@@ -508,6 +549,30 @@ describe("prepareCompaction source messages", () => {
 		expect(preparation.turnPrefixSourceMessages).toEqual(preparation.turnPrefixMessages);
 		expect(extractText(preparation.turnPrefixSourceMessages)).toContain("large request");
 		expect(extractText(preparation.turnPrefixSourceMessages)).not.toContain("kept");
+	});
+});
+
+describe("prepareCompaction on a small context window", () => {
+	it("returns a plan for a 32k window when the defaults alone would keep everything", () => {
+		// ~18k estimated tokens (chars/4): below the default keepRecentTokens (20000) but above the
+		// scaled 12288 for a 32k window. Usage reports 25k, i.e. past the scaled 24576 threshold.
+		const entries: SessionEntry[] = [];
+		const text = "x".repeat(4000); // 1000 estimated tokens per message
+		for (let i = 0; i < 9; i++) {
+			entries.push(createMessageEntry(createUserMessage(text)));
+			entries.push(createMessageEntry(createAssistantMessage(text, createMockUsage(25000, 500))));
+		}
+
+		expect(prepareCompaction(entries, DEFAULT_COMPACTION_SETTINGS)).toBeUndefined();
+
+		const preparation = prepareCompaction(entries, DEFAULT_COMPACTION_SETTINGS, 32768);
+		expect(preparation).toBeDefined();
+		expect(preparation!.settings).toEqual({ enabled: true, reserveTokens: 8192, keepRecentTokens: 12288 });
+		// Walking back 13 messages reaches 12288; the cut lands on the assistant at index 5.
+		expect(preparation!.firstKeptEntryId).toBe(entries[5].id);
+		expect(preparation!.isSplitTurn).toBe(true);
+		expect(preparation!.messagesToSummarize).toHaveLength(4);
+		expect(preparation!.turnPrefixMessages).toHaveLength(1);
 	});
 });
 

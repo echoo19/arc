@@ -292,6 +292,33 @@ function formatValidationPath(error: TLocalizedValidationError): string {
 	return path || "root";
 }
 
+const MAX_ECHOED_STRING_CHARS = 200;
+const MAX_ECHOED_ARGUMENTS_CHARS = 1500;
+
+function truncateStrings(value: unknown): unknown {
+	if (typeof value === "string") {
+		return value.length > MAX_ECHOED_STRING_CHARS
+			? `${value.slice(0, MAX_ECHOED_STRING_CHARS)}…[${value.length - MAX_ECHOED_STRING_CHARS} more chars]`
+			: value;
+	}
+	if (Array.isArray(value)) {
+		return value.map(truncateStrings);
+	}
+	if (typeof value === "object" && value !== null) {
+		return Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, truncateStrings(entry)]));
+	}
+	return value;
+}
+
+/**
+ * Pretty-prints tool call arguments for an error message, keeping the echo bounded so a
+ * botched call with a large payload does not cost the model its context window twice.
+ */
+function formatArgumentsForError(args: unknown): string {
+	const json = JSON.stringify(truncateStrings(args), null, 2) ?? String(args);
+	return json.length > MAX_ECHOED_ARGUMENTS_CHARS ? `${json.slice(0, MAX_ECHOED_ARGUMENTS_CHARS)}…[truncated]` : json;
+}
+
 /**
  * Finds a tool by name and validates the tool call arguments against its TypeBox schema
  * @param tools Array of tool definitions
@@ -344,7 +371,7 @@ export function validateToolArguments(tool: Tool, toolCall: ToolCall): any {
 			.map((error) => `  - ${formatValidationPath(error)}: ${error.message}`)
 			.join("\n") || "Unknown validation error";
 
-	const errorMessage = `Validation failed for tool "${toolCall.name}":\n${errors}\n\nReceived arguments:\n${JSON.stringify(toolCall.arguments, null, 2)}`;
+	const errorMessage = `Validation failed for tool "${toolCall.name}":\n${errors}\n\nReceived arguments:\n${formatArgumentsForError(toolCall.arguments)}`;
 
 	throw new Error(errorMessage);
 }

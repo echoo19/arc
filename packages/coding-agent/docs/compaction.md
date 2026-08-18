@@ -34,6 +34,17 @@ contextTokens > contextWindow - reserveTokens
 
 By default, `reserveTokens` is 16384 tokens (configurable in `~/.pi/agent/settings.json` or `<project-dir>/.pi/settings.json`). This leaves room for the LLM's response.
 
+#### Small context windows
+
+The defaults assume a large context window. On a small one they cancel each other out: with a 32k window the threshold would fire at 16k, but the cut point still wants to keep 20k of recent history, so there is nothing to summarize and compaction never happens until the window overflows. To avoid this, both budgets are capped per model before use:
+
+```
+reserveTokens    = min(setting, max(2048, 25% of contextWindow))
+keepRecentTokens = min(setting, max(2048, 50% of (contextWindow - reserveTokens)))
+```
+
+For a 32k window the defaults become 8192 / 12288: compaction triggers above 24k tokens and keeps the most recent ~12k. Configured values below the caps are used as-is, and models without a known `contextWindow` use the settings unchanged. The summary request's output budget (`0.8 * reserveTokens`) uses the scaled value too.
+
 You can also trigger manually with `/compact [instructions]`, where optional instructions focus the summary.
 
 ### How It Works
@@ -412,7 +423,7 @@ Configure compaction in `~/.pi/agent/settings.json` or `<project-dir>/.pi/settin
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `enabled` | `true` | Enable auto-compaction |
-| `reserveTokens` | `16384` | Tokens to reserve for LLM response |
-| `keepRecentTokens` | `20000` | Recent tokens to keep (not summarized) |
+| `reserveTokens` | `16384` | Tokens to reserve for LLM response (capped at 25% of the model's context window) |
+| `keepRecentTokens` | `20000` | Recent tokens to keep (not summarized; capped at 50% of the window minus the reserve) |
 
 Disable auto-compaction with `"enabled": false`. You can still compact manually with `/compact`.

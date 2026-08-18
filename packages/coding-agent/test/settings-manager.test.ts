@@ -493,6 +493,27 @@ describe("SettingsManager", () => {
 		});
 	});
 
+	describe("toolOutput", () => {
+		it("should load toolOutput limits from settings and merge project overrides", () => {
+			writeFileSync(
+				join(agentDir, "settings.json"),
+				JSON.stringify({ toolOutput: { maxLines: 400, maxBytes: 12000 } }),
+			);
+			mkdirSync(join(projectDir, ".pi"), { recursive: true });
+			writeFileSync(join(projectDir, ".pi", "settings.json"), JSON.stringify({ toolOutput: { maxBytes: 9000 } }));
+
+			const manager = SettingsManager.create(projectDir, agentDir);
+
+			expect(manager.getToolOutputLimits()).toEqual({ maxLines: 400, maxBytes: 9000 });
+		});
+
+		it("should return undefined when toolOutput is not set", () => {
+			writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ theme: "dark" }));
+
+			expect(SettingsManager.create(projectDir, agentDir).getToolOutputLimits()).toBeUndefined();
+		});
+	});
+
 	describe("shellCommandPrefix", () => {
 		it("should load shellCommandPrefix from settings", () => {
 			const settingsPath = join(agentDir, "settings.json");

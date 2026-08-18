@@ -9,12 +9,19 @@ import type {
 } from "../types.ts";
 import { estimateContextTokens } from "../utils/estimate.ts";
 
-const CONTEXT_SAFETY_TOKENS = 4096;
+const MAX_CONTEXT_SAFETY_TOKENS = 4096;
+const MIN_CONTEXT_SAFETY_TOKENS = 512;
 const MIN_MAX_TOKENS = 1;
 
 export function clampMaxTokensToContext(model: Model<Api>, context: Context, maxTokens: number): number {
 	if (model.contextWindow <= 0) return Math.max(MIN_MAX_TOKENS, maxTokens);
-	const available = model.contextWindow - estimateContextTokens(context).tokens - CONTEXT_SAFETY_TOKENS;
+	// Margin for provider framing and tokenizer variance. Scales with the window (1/16,
+	// 512..4096) so a flat 4096 does not eat the answer budget on small windows.
+	const safetyTokens = Math.min(
+		MAX_CONTEXT_SAFETY_TOKENS,
+		Math.max(MIN_CONTEXT_SAFETY_TOKENS, Math.floor(model.contextWindow / 16)),
+	);
+	const available = model.contextWindow - estimateContextTokens(context).tokens - safetyTokens;
 	return Math.min(maxTokens, Math.max(MIN_MAX_TOKENS, available));
 }
 

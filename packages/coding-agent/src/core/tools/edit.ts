@@ -7,6 +7,7 @@ import { renderDiff } from "../../modes/interactive/components/diff.ts";
 import type { Theme } from "../../modes/interactive/theme/theme.ts";
 import { getExperimentalToolSampling } from "../experimental.ts";
 import type { ToolDefinition } from "../extensions/types.ts";
+import { normalizeToolArgs } from "./arg-aliases.ts";
 import {
 	applyEditsToNormalizedContent,
 	computeEditsDiff,
@@ -118,7 +119,7 @@ function prepareEditArguments(input: unknown): EditToolInput {
 		return input as EditToolInput;
 	}
 
-	const args = input as Record<string, unknown>;
+	const args = normalizeToolArgs("edit", input as Record<string, unknown>);
 
 	// Some models (Opus 4.6, GLM-5.1) send edits as a JSON string instead of an array.
 	// Others send a single edit object instead of a one-element edits array.

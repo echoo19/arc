@@ -219,6 +219,8 @@ Windows paths in JSON must use forward slashes or escaped backslashes:
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
 | `defaultTools` | string[] | - | Built-in tools enabled initially. When omitted, Pi uses its standard defaults |
+| `toolOutput.maxLines` | number | scaled | Line cap for `read` and `bash` output. Default scales with the model context window (`contextWindow/64`, clamped to 300-2000; 2000 without a known window) |
+| `toolOutput.maxBytes` | number | scaled | Byte cap for `read`, `bash`, `grep`, `find`, and `ls` output. Default scales with the model context window (`contextWindow/8` tokens x 3.5 bytes, clamped to 8KB-50KB; 50KB without a known window) |
 
 `defaultTools` selects the built-in tools enabled at startup. Extension and SDK custom tools remain enabled:
 

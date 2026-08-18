@@ -7,6 +7,7 @@ import { type Static, Type } from "typebox";
 import { keyHint } from "../../modes/interactive/components/keybinding-hints.ts";
 import { truncateToVisualLines } from "../../modes/interactive/components/visual-truncate.ts";
 import { theme } from "../../modes/interactive/theme/theme.ts";
+import { stripAnsi } from "../../utils/ansi.ts";
 import { waitForChildProcess } from "../../utils/child-process.ts";
 import {
 	getShellConfig,
@@ -17,10 +18,12 @@ import {
 } from "../../utils/shell.ts";
 import { getExperimentalToolSampling } from "../experimental.ts";
 import type { ExtensionContext, ToolDefinition, ToolRenderResultOptions } from "../extensions/types.ts";
+import { prepareArgumentsWithAliases } from "./arg-aliases.ts";
 import { OutputAccumulator } from "./output-accumulator.ts";
+import { getToolOutputLimits, type ToolOutputLimitsOption } from "./output-limits.ts";
 import { getTextOutput, invalidArgText, str } from "./render-utils.ts";
 import { wrapToolDefinition } from "./tool-definition-wrapper.ts";
-import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, type TruncationResult } from "./truncate.ts";
+import { DEFAULT_MAX_BYTES, formatSize, type TruncationResult } from "./truncate.ts";
 
 const MAX_TIMEOUT_MS = 2_147_483_647;
 const MAX_TIMEOUT_SECONDS = MAX_TIMEOUT_MS / 1000;
@@ -200,6 +203,26 @@ export interface BashToolOptions {
 	exposeSessionEnvironment?: boolean;
 	/** Hook to adjust command, cwd, or env before execution */
 	spawnHook?: BashSpawnHook;
+	/** Line/byte caps for the output returned to the model. Default: 2000 lines / 50KB */
+	outputLimits?: ToolOutputLimitsOption;
+}
+
+/**
+ * Make raw terminal output readable for the model: drop ANSI/VT escapes and
+ * resolve carriage returns (CRLF -> LF; a bare \r overwrites the line so far,
+ * as progress bars rely on, so only the text after the last \r survives).
+ */
+export function cleanOutputForModel(text: string): string {
+	const stripped = stripAnsi(text);
+	if (!stripped.includes("\r")) return stripped;
+	return stripped
+		.split("\n")
+		.map((line) => {
+			const trimmed = line.replace(/\r+$/, "");
+			const lastCr = trimmed.lastIndexOf("\r");
+			return lastCr === -1 ? trimmed : trimmed.slice(lastCr + 1);
+		})
+		.join("\n");
 }
 
 const BASH_PREVIEW_LINES = 5;
@@ -329,8 +352,10 @@ export function createBashToolDefinition(
 	const spawnHook = options?.spawnHook;
 	return {
 		name: "bash",
+		prepareArguments: prepareArgumentsWithAliases("bash"),
 		label: "bash",
-		description: `Execute a bash command in the current working directory. Returns stdout and stderr. Output is truncated to last ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first). If truncated, full output is saved to a temp file. Optionally provide a timeout in seconds.`,
+		description:
+			"Execute a bash command in the current working directory. Returns stdout and stderr. Long output is truncated to its tail; a trailing note says how much was shown and where the full output was saved. Optionally provide a timeout in seconds.",
 		promptSnippet: bashToolSystemPromptContribution.snippet,
 		promptGuidelines: exposeSessionEnvironment ? [...bashToolSystemPromptContribution.guidelines] : undefined,
 		parameters: bashSchema,
@@ -344,7 +369,10 @@ export function createBashToolDefinition(
 		) {
 			const resolvedCommand = commandPrefix ? `${commandPrefix}\n${command}` : command;
 			const spawnContext = resolveSpawnContext(resolvedCommand, cwd, spawnHook, exposeSessionEnvironment, ctx);
-			const output = new OutputAccumulator({ tempFilePrefix: "pi-bash" });
+			const output = new OutputAccumulator({
+				tempFilePrefix: "pi-bash",
+				...getToolOutputLimits(options?.outputLimits),
+			});
 			let acceptingOutput = true;
 			let updateTimer: NodeJS.Timeout | undefined;
 			let updateDirty = false;
@@ -408,7 +436,7 @@ export function createBashToolDefinition(
 
 			const formatOutput = (snapshot: Awaited<ReturnType<typeof finishOutput>>, emptyText = "(no output)") => {
 				const truncation = snapshot.truncation;
-				let text = snapshot.content || emptyText;
+				let text = cleanOutputForModel(snapshot.content) || emptyText;
 				let details: BashToolDetails | undefined;
 				if (truncation.truncated) {
 					details = { truncation, fullOutputPath: snapshot.fullOutputPath };
@@ -420,7 +448,7 @@ export function createBashToolDefinition(
 					} else if (truncation.truncatedBy === "lines") {
 						text += `\n\n[Showing lines ${startLine}-${endLine} of ${truncation.totalLines}. Full output: ${snapshot.fullOutputPath}]`;
 					} else {
-						text += `\n\n[Showing lines ${startLine}-${endLine} of ${truncation.totalLines} (${formatSize(DEFAULT_MAX_BYTES)} limit). Full output: ${snapshot.fullOutputPath}]`;
+						text += `\n\n[Showing lines ${startLine}-${endLine} of ${truncation.totalLines} (${formatSize(truncation.maxBytes)} limit). Full output: ${snapshot.fullOutputPath}]`;
 					}
 				}
 				return { text, details };

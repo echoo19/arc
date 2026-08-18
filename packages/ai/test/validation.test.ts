@@ -207,4 +207,48 @@ describe("validateToolArguments", () => {
 			expect(() => validateToolArguments(tool, toolCall)).toThrow("Validation failed");
 		}
 	});
+
+	describe("error message argument echo", () => {
+		const tool: Tool = {
+			name: "write",
+			description: "Write tool",
+			parameters: Type.Object({
+				path: Type.String(),
+				content: Type.String(),
+				nested: Type.Optional(Type.Object({ note: Type.String() })),
+			}),
+		};
+
+		function failureMessage(args: Record<string, unknown>): string {
+			try {
+				validateToolArguments(tool, { type: "toolCall", id: "tool-1", name: "write", arguments: args });
+			} catch (error) {
+				return (error as Error).message;
+			}
+			throw new Error("expected validation to fail");
+		}
+
+		it("keeps the per-field error list and short arguments intact", () => {
+			const message = failureMessage({ content: "hello" });
+			expect(message).toContain('Validation failed for tool "write":\n  - path: ');
+			expect(message).toContain('Received arguments:\n{\n  "content": "hello"\n}');
+		});
+
+		it("truncates long string values, including nested ones", () => {
+			const long = "x".repeat(5000);
+			const message = failureMessage({ content: long, nested: { note: long } });
+			expect(message).not.toContain("x".repeat(201));
+			expect(message.match(/x{200}…\[4800 more chars\]/g)).toHaveLength(2);
+		});
+
+		it("caps the echoed block at 1500 chars", () => {
+			const args: Record<string, unknown> = { content: "c" };
+			for (let index = 0; index < 100; index++) args[`extra${index}`] = "v".repeat(100);
+			const message = failureMessage(args);
+			const echoed = message.slice(message.indexOf("Received arguments:\n") + "Received arguments:\n".length);
+			expect(echoed.endsWith("…[truncated]")).toBe(true);
+			expect(echoed.length).toBe(1500 + "…[truncated]".length);
+			expect(message).toContain("  - path: ");
+		});
+	});
 });

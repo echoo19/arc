@@ -237,6 +237,32 @@ describe("Coding Agent Tools", () => {
 		});
 	});
 
+	describe("read tool output limits", () => {
+		it("should honor outputLimits for lines and bytes and report the limit in the footer", async () => {
+			const testFile = join(testDir, "limits.txt");
+			writeFileSync(testFile, Array.from({ length: 50 }, (_, i) => `line ${i + 1}`).join("\n"));
+
+			const byLines = createReadTool(process.cwd(), { outputLimits: { maxLines: 10, maxBytes: 51200 } });
+			const linesResult = await byLines.execute("test-read-limit-lines", { path: testFile });
+			expect(getTextOutput(linesResult)).toContain("[Showing lines 1-10 of 50. Use offset=11 to continue.]");
+
+			const byBytes = createReadTool(process.cwd(), { outputLimits: () => ({ maxLines: 2000, maxBytes: 100 }) });
+			const bytesResult = await byBytes.execute("test-read-limit-bytes", { path: testFile });
+			expect(getTextOutput(bytesResult)).toMatch(
+				/\[Showing lines 1-\d+ of 50 \(100B limit\)\. Use offset=\d+ to continue\.\]/,
+			);
+		});
+
+		it("should mention the configured limit when the first line is too long", async () => {
+			const testFile = join(testDir, "long-line.txt");
+			writeFileSync(testFile, "y".repeat(300));
+			const read = createReadTool(process.cwd(), { outputLimits: { maxLines: 2000, maxBytes: 200 } });
+			const result = await read.execute("test-read-long-line", { path: testFile });
+			expect(getTextOutput(result)).toContain("exceeds 200B limit. Use bash: sed -n '1p'");
+			expect(getTextOutput(result)).toContain("| head -c 200]");
+		});
+	});
+
 	describe("write tool", () => {
 		it("should write file contents", async () => {
 			const testFile = join(testDir, "write-test.txt");
@@ -644,6 +670,57 @@ describe("Coding Agent Tools", () => {
 			expect(getTextOutput(result).trim()).toBe("no-prefix");
 		});
 
+		it("should strip ANSI escapes and resolve carriage returns in model output", async () => {
+			const colored = await bashTool.execute("test-call-ansi", { command: "printf '\\033[33m55\\033[39m\\n'" });
+			expect(getTextOutput(colored).trim()).toBe("55");
+
+			const operations: BashOperations = {
+				exec: async (_command, _cwd, { onData }) => {
+					onData(Buffer.from("\x1b[?25l10%\r50%\r100%\r\nline two\r\ntrailing\r", "utf-8"));
+					return { exitCode: 0 };
+				},
+			};
+			const bash = createBashTool(testDir, { operations });
+			const result = await bash.execute("test-call-cr", { command: "progress" });
+			expect(getTextOutput(result)).toBe("100%\nline two\ntrailing");
+		});
+
+		it("should apply outputLimits from a getter on every execution", async () => {
+			const operations: BashOperations = {
+				exec: async (_command, _cwd, { onData }) => {
+					for (let i = 1; i <= 100; i++) onData(Buffer.from(`line-${i}\n`, "utf-8"));
+					return { exitCode: 0 };
+				},
+			};
+			let maxLines = 10;
+			const bash = createBashTool(testDir, {
+				operations,
+				outputLimits: () => ({ maxLines, maxBytes: 1024 }),
+			});
+
+			const first = await bash.execute("test-call-limits-1", { command: "many" });
+			expect(first.details?.truncation?.outputLines).toBe(10);
+			expect(getTextOutput(first)).toMatch(/\[Showing lines 91-100 of 100\. Full output: /);
+
+			maxLines = 20;
+			const second = await bash.execute("test-call-limits-2", { command: "many" });
+			expect(second.details?.truncation?.outputLines).toBe(20);
+			expect(getTextOutput(second)).toMatch(/\[Showing lines 81-100 of 100\. Full output: /);
+		});
+
+		it("should report the configured byte limit in the truncation footer", async () => {
+			const operations: BashOperations = {
+				exec: async (_command, _cwd, { onData }) => {
+					for (let i = 1; i <= 100; i++) onData(Buffer.from(`${"x".repeat(50)}\n`, "utf-8"));
+					return { exitCode: 0 };
+				},
+			};
+			const bash = createBashTool(testDir, { operations, outputLimits: { maxLines: 2000, maxBytes: 1024 } });
+			const result = await bash.execute("test-call-byte-limit", { command: "wide" });
+			expect(result.details?.truncation?.truncatedBy).toBe("bytes");
+			expect(getTextOutput(result)).toMatch(/\(1\.0KB limit\)\. Full output: /);
+		});
+
 		it("should coalesce streaming updates for chatty output", async () => {
 			const operations: BashOperations = {
 				exec: async (_command, _cwd, { onData }) => {
@@ -821,6 +898,19 @@ describe("Coding Agent Tools", () => {
 		});
 	});
 
+	describe("grep tool output limits", () => {
+		it("should apply the byte cap from outputLimits", async () => {
+			const testFile = join(testDir, "many-matches.txt");
+			writeFileSync(testFile, Array.from({ length: 50 }, (_, i) => `match ${i} ${"z".repeat(40)}`).join("\n"));
+			const grep = createGrepTool(process.cwd(), { outputLimits: { maxLines: 2000, maxBytes: 300 } });
+			const result = await grep.execute("test-grep-limit", { pattern: "match", path: testFile });
+			const output = getTextOutput(result);
+			expect(output).toContain("[300B limit reached]");
+			expect(result.details?.truncation?.maxBytes).toBe(300);
+			expect(output).not.toContain("match 49 ");
+		});
+	});
+
 	describe("find tool", () => {
 		it("should include hidden files that are not gitignored", async () => {
 			const hiddenDir = join(testDir, ".secret");
@@ -886,6 +976,24 @@ describe("Coding Agent Tools", () => {
 
 			expect(output).toContain(".hidden-file");
 			expect(output).toContain(".hidden-dir/");
+		});
+
+		it("should apply the byte cap from outputLimits", async () => {
+			for (let i = 0; i < 40; i++) writeFileSync(join(testDir, `entry-${String(i).padStart(2, "0")}.txt`), "");
+			const ls = createLsTool(process.cwd(), { outputLimits: { maxLines: 2000, maxBytes: 100 } });
+			const result = await ls.execute("test-ls-limit", { path: testDir });
+			const output = getTextOutput(result);
+			expect(output).toContain("[100B limit reached]");
+			expect(output).not.toContain("entry-39.txt");
+		});
+	});
+
+	describe("tool descriptions", () => {
+		it("should not hard-code truncation sizes", () => {
+			for (const tool of [readTool, bashTool, grepTool, findTool, lsTool]) {
+				expect(tool.description).not.toMatch(/\d+KB/);
+				expect(tool.description).not.toContain("2000 lines");
+			}
 		});
 	});
 });

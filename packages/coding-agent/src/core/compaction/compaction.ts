@@ -187,6 +187,33 @@ export const DEFAULT_COMPACTION_SETTINGS: CompactionSettings = {
 	keepRecentTokens: 20000,
 };
 
+/** Smallest budget the auto-scaling will shrink reserveTokens or keepRecentTokens to. */
+const MIN_SCALED_COMPACTION_TOKENS = 2048;
+
+/**
+ * Scale compaction budgets down for small context windows.
+ *
+ * The defaults (reserve 16k, keep 20k) assume 100k+ windows. On a 32k window the
+ * threshold fires at 16k while the cut point still wants 20k of recent history, so
+ * prepareCompaction finds nothing to summarize and auto-compaction silently no-ops
+ * until the window overflows. Caps: reserveTokens <= 25% of the window,
+ * keepRecentTokens <= 50% of what remains after the reserve. Configured values below
+ * the caps are kept; unknown windows (<= 0) return the settings unchanged.
+ */
+export function resolveCompactionSettings(settings: CompactionSettings, contextWindow: number): CompactionSettings {
+	if (contextWindow <= 0) return settings;
+	const reserveTokens = Math.min(
+		settings.reserveTokens,
+		Math.max(MIN_SCALED_COMPACTION_TOKENS, Math.floor(contextWindow * 0.25)),
+	);
+	const keepRecentTokens = Math.min(
+		settings.keepRecentTokens,
+		Math.max(MIN_SCALED_COMPACTION_TOKENS, Math.floor((contextWindow - reserveTokens) * 0.5)),
+	);
+	if (reserveTokens === settings.reserveTokens && keepRecentTokens === settings.keepRecentTokens) return settings;
+	return { ...settings, reserveTokens, keepRecentTokens };
+}
+
 // ============================================================================
 // Token calculation
 // ============================================================================
@@ -286,7 +313,7 @@ export function estimateContextTokens(messages: AgentMessage[]): ContextUsageEst
  */
 export function shouldCompact(contextTokens: number, contextWindow: number, settings: CompactionSettings): boolean {
 	if (!settings.enabled) return false;
-	return contextTokens > contextWindow - settings.reserveTokens;
+	return contextTokens > contextWindow - resolveCompactionSettings(settings, contextWindow).reserveTokens;
 }
 
 // ============================================================================
@@ -720,7 +747,7 @@ function buildSummarizationContext(promptText: string, sourceContext?: Context):
 
 /**
  * Extra room for provider framing and tokenizer variance omitted by the heuristic context estimate.
- * This matches the 4096-token margin used when normal simple requests clamp maxTokens to their context window.
+ * This matches the largest margin normal simple requests use when clamping maxTokens to the context window.
  */
 const CACHE_FRIENDLY_CONTEXT_SAFETY_TOKENS = 4096;
 
@@ -855,17 +882,23 @@ export interface CompactionPreparation {
 	previousSummary?: string;
 	/** File operations extracted from messagesToSummarize */
 	fileOps: FileOperations;
-	/** Compaction settions from settings.jsonl	*/
+	/** Compaction settings, scaled to the model's context window (see resolveCompactionSettings) */
 	settings: CompactionSettings;
 }
 
+/**
+ * @param contextWindow - Context window of the model that will consume the compacted
+ *   session; scales the budgets on small windows. Omit or pass 0 to use settings as-is.
+ */
 export function prepareCompaction(
 	pathEntries: SessionEntry[],
 	settings: CompactionSettings,
+	contextWindow = 0,
 ): CompactionPreparation | undefined {
 	if (pathEntries.length > 0 && pathEntries[pathEntries.length - 1].type === "compaction") {
 		return undefined;
 	}
+	const resolvedSettings = resolveCompactionSettings(settings, contextWindow);
 
 	let prevCompactionIndex = -1;
 	for (let i = pathEntries.length - 1; i >= 0; i--) {
@@ -887,7 +920,7 @@ export function prepareCompaction(
 
 	const tokensBefore = estimateContextTokens(buildSessionContext(pathEntries).messages).tokens;
 
-	const cutPoint = findCutPoint(pathEntries, boundaryStart, boundaryEnd, settings.keepRecentTokens);
+	const cutPoint = findCutPoint(pathEntries, boundaryStart, boundaryEnd, resolvedSettings.keepRecentTokens);
 
 	// Get UUID of first kept entry
 	const firstKeptEntry = pathEntries[cutPoint.firstKeptEntryIndex];
@@ -943,7 +976,7 @@ export function prepareCompaction(
 		tokensBefore,
 		previousSummary,
 		fileOps,
-		settings,
+		settings: resolvedSettings,
 	};
 }
 

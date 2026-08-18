@@ -62,6 +62,11 @@ export interface MarkdownSettings {
 	mermaid?: MermaidRenderingMode; // default: "streaming"
 }
 
+export interface ToolOutputSettings {
+	maxLines?: number; // override the context-scaled line cap for read/bash output
+	maxBytes?: number; // override the context-scaled byte cap for read/bash/grep/find/ls output
+}
+
 export interface WarningSettings {
 	anthropicExtraUsage?: boolean; // default: true
 }
@@ -121,6 +126,7 @@ export interface Settings {
 	images?: ImageSettings;
 	enabledModels?: string[]; // Model patterns for cycling (same format as --models CLI flag)
 	defaultTools?: string[]; // Initial built-in tool selection
+	toolOutput?: ToolOutputSettings; // Explicit caps for built-in tool output; default scales with the model context window
 	doubleEscapeAction?: "fork" | "tree" | "none"; // Action for double-escape with empty editor (default: "tree")
 	treeFilterMode?: "default" | "no-tools" | "user-only" | "labeled-only" | "all"; // Default filter when opening /tree
 	thinkingBudgets?: ThinkingBudgetsSettings; // Custom token budgets for thinking levels
@@ -1157,6 +1163,10 @@ export class SettingsManager {
 		this.globalSettings.fullscreenScrollbar = mode;
 		this.markModified("fullscreenScrollbar");
 		this.save();
+	}
+
+	getToolOutputLimits(): ToolOutputSettings | undefined {
+		return this.settings.toolOutput;
 	}
 
 	getImageAutoResize(): boolean {

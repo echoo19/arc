@@ -6,6 +6,8 @@ import { type Static, Type } from "typebox";
 import { keyHint } from "../../modes/interactive/components/keybinding-hints.ts";
 import type { Theme } from "../../modes/interactive/theme/theme.ts";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.ts";
+import { prepareArgumentsWithAliases } from "./arg-aliases.ts";
+import { getToolOutputLimits, type ToolOutputLimitsOption } from "./output-limits.ts";
 import { pathExists, resolveToCwd } from "./path-utils.ts";
 import { getTextOutput, renderToolPath, str } from "./render-utils.ts";
 import { wrapToolDefinition } from "./tool-definition-wrapper.ts";
@@ -52,6 +54,8 @@ const defaultLsOperations: LsOperations = {
 export interface LsToolOptions {
 	/** Custom operations for directory listing. Default: local filesystem */
 	operations?: LsOperations;
+	/** Byte cap for the returned text (maxLines is unused; the entry limit caps rows). Default: 50KB */
+	outputLimits?: ToolOutputLimitsOption;
 }
 
 function formatLsCall(args: { path?: string; limit?: number } | undefined, theme: Theme, cwd: string): string {
@@ -104,8 +108,9 @@ export function createLsToolDefinition(
 	const ops = options?.operations ?? defaultLsOperations;
 	return {
 		name: "ls",
+		prepareArguments: prepareArgumentsWithAliases("ls"),
 		label: "ls",
-		description: `List directory contents. Returns entries sorted alphabetically, with '/' suffix for directories. Includes dotfiles. Output is truncated to ${DEFAULT_LIMIT} entries or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first).`,
+		description: `List directory contents. Returns entries sorted alphabetically, with '/' suffix for directories. Includes dotfiles. Returns at most ${DEFAULT_LIMIT} entries by default; output beyond the byte cap is truncated with a trailing note.`,
 		promptSnippet: lsToolSystemPromptContribution.snippet,
 		parameters: lsSchema,
 		async execute(
@@ -184,7 +189,10 @@ export function createLsToolDefinition(
 
 						const rawOutput = results.join("\n");
 						// Apply byte truncation. There is no separate line limit because entry count is already capped.
-						const truncation = truncateHead(rawOutput, { maxLines: Number.MAX_SAFE_INTEGER });
+						const truncation = truncateHead(rawOutput, {
+							maxLines: Number.MAX_SAFE_INTEGER,
+							maxBytes: getToolOutputLimits(options?.outputLimits).maxBytes,
+						});
 						let output = truncation.content;
 						const details: LsToolDetails = {};
 						// Build actionable notices for truncation and entry limits.
@@ -194,7 +202,7 @@ export function createLsToolDefinition(
 							details.entryLimitReached = effectiveLimit;
 						}
 						if (truncation.truncated) {
-							notices.push(`${formatSize(DEFAULT_MAX_BYTES)} limit reached`);
+							notices.push(`${formatSize(truncation.maxBytes)} limit reached`);
 							details.truncation = truncation;
 						}
 						if (notices.length > 0) {
