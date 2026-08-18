@@ -3,6 +3,7 @@ import { isQwenLocalActive } from "./activation.ts";
 import { endedEmpty, endedWithAnnouncedAction, LoopGuard, normalizeToolArgs } from "./guards.ts";
 import { rewriteQwenPayload } from "./payload.ts";
 import { buildQwenSystemPrompt } from "./prompt.ts";
+import { pruneReplayedThinking, replayThinkingMode } from "./replay.ts";
 
 const BASH_DEFAULT_TIMEOUT_SECONDS = 120;
 const MAX_NUDGES = 2;
@@ -28,6 +29,12 @@ export default function qwenLocalExtension(pi: ExtensionAPI): void {
 		// Respect an explicit user prompt (--system-prompt / SYSTEM.md).
 		if (event.systemPromptOptions.customPrompt) return undefined;
 		return { systemPrompt: buildQwenSystemPrompt(event.systemPromptOptions) };
+	});
+
+	pi.on("context", (event, ctx) => {
+		if (!isQwenLocalActive(ctx.model)) return undefined;
+		const messages = pruneReplayedThinking(event.messages, replayThinkingMode(), ctx.getContextUsage()?.percent);
+		return messages ? { messages } : undefined;
 	});
 
 	pi.on("before_provider_request", (event, ctx) => {
