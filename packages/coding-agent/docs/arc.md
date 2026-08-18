@@ -2,6 +2,8 @@
 
 Arc is this fork's name for pi running against a local Qwen model. It is implemented as a hidden built-in extension, `arc`, that tunes the agent for Qwen models served locally through an OpenAI-compatible endpoint (llama.cpp `llama-server`, and similar). It changes nothing for other models.
 
+The build is white-labelled as `arc` (`piConfig.name`): the banner and self-update messages say `arc`, the agent-dir override becomes `ARC_CODING_AGENT_DIR`, and the CLI is installed as both `arc` and `pi`. The config directory stays `~/.pi/agent`, so existing `models.json`, settings and sessions keep working.
+
 ## Activation
 
 The profile is evaluated per hook from the current model:
